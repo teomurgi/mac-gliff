@@ -290,12 +290,15 @@ impl Recombiner {
             height: 16,
             depth: 1,
         };
-        let grid = MTLSize {
-            width: (w as u64).div_ceil(32),
-            height: (h as u64).div_ceil(32),
+        let groups = MTLSize {
+            width: ((w / 2) as u64).div_ceil(16),
+            height: ((h / 2) as u64).div_ceil(16),
             depth: 1,
         };
-        enc.dispatch_threads(grid, group);
+        // dispatch_thread_groups rather than dispatch_threads: the
+        // non-uniform path misexecutes on some virtualized GPUs (the
+        // first blocks only), and the grid here is uniform anyway.
+        enc.dispatch_thread_groups(groups, group);
         enc.end_encoding();
         cmd.commit();
         cmd.wait_until_completed();

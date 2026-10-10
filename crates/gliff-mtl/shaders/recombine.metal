@@ -29,13 +29,14 @@ static inline float3 to_rgb(float y8, float u8, float v8) {
 
 static inline void store(texture2d<float, access::write> dst, uint2 at,
                          float3 rgb, uint zoom) {
-    // The output texture is BGRA8: .x lands in byte 0 (B), like the .bgr
-    // swizzle of the GLSL original.
-    float4 bgra = float4(rgb.b, rgb.g, rgb.r, 1.0f);
+    // Writes are logical RGBA: the BGRA8Unorm format maps the components
+    // onto its own byte order, so no manual swap (unlike the GLSL
+    // original, whose image was a raw rgba8 view of a BGRX buffer).
+    float4 px = float4(rgb, 1.0f);
     uint2 base = at * zoom;
     for (uint j = 0; j < zoom; j++) {
         for (uint i = 0; i < zoom; i++) {
-            dst.write(bgra, base + uint2(i, j));
+            dst.write(px, base + uint2(i, j));
         }
     }
 }
