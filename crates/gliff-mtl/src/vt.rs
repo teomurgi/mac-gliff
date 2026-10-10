@@ -120,12 +120,26 @@ pub struct Decoder {
     shared: Arc<Shared>,
     /// Presentation timestamp counter, in 600ths of a second.
     frame: AtomicI64,
+    /// Whether hardware decode is allowed. Forced off in virtualized
+    /// machines, where reaching for the (absent) hardware decoder can
+    /// crash VideoToolbox outright.
+    hardware: bool,
 }
 
 impl Decoder {
     /// The session is built from the stream's own SPS/PPS at the first
-    /// access unit; nothing touches the GPU here.
+    /// access unit; hardware decode when the machine has it.
     pub fn new() -> Result<Self> {
+        Self::with_hardware(true)
+    }
+
+    /// Force the software decoder; for virtual machines whose
+    /// VideoToolbox crashes when asked for hardware decode.
+    pub fn new_software() -> Result<Self> {
+        Self::with_hardware(false)
+    }
+
+    fn with_hardware(hardware: bool) -> Result<Self> {
         // SAFETY: creating a semaphore with count 0 is always valid.
         let sem = unsafe { dispatch_semaphore_create(0) };
         Ok(Self {
@@ -137,6 +151,7 @@ impl Decoder {
                 pending: Mutex::new(None),
             }),
             frame: AtomicI64::new(0),
+            hardware,
         })
     }
 
@@ -231,6 +246,7 @@ impl Decoder {
     fn rebuild(&mut self, ps: &OwnedPs) -> Result<()> {
         let format = create_format_description(ps)?;
         let attrs = destination_attributes()?;
+        let spec = decoder_specification(self.hardware)?;
         let record = VTDecompressionOutputCallbackRecord {
             decompressionOutputCallback: Some(on_output),
             decompressionOutputRefCon: Arc::as_ptr(&self.shared) as *mut c_void,
@@ -245,12 +261,13 @@ impl Decoder {
                 VTDecompressionSessionCreate(
                     K_CF_ALLOCATOR_DEFAULT,
                     format,
-                    null(), // no source spec: samples are complete
+                    spec,
                     attrs,
                     &record,
                     &mut session,
                 ),
             )?;
+            CFRelease(spec.cast());
             CFRelease(attrs.cast());
             self.teardown_session();
         }
@@ -337,6 +354,28 @@ fn check(call: &'static str, code: i32) -> Result<()> {
         Ok(())
     } else {
         Err(Error::Status { call, code })
+    }
+}
+
+/// The decoder specification: whether hardware decode may be used.
+fn decoder_specification(hardware: bool) -> Result<CFDictionaryRef> {
+    // SAFETY: the key and values are live CF globals; the dictionary
+    // owns nothing beyond them.
+    unsafe {
+        let keys = [K_VT_ENABLE_HARDWARE_DECODE];
+        let values = [if hardware {
+            K_CF_BOOLEAN_TRUE
+        } else {
+            K_CF_BOOLEAN_FALSE
+        }];
+        Ok(CFDictionaryCreate(
+            K_CF_ALLOCATOR_DEFAULT,
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,
+            &K_CF_TYPE_DICTIONARY_KEY_CALL_BACKS,
+            &K_CF_TYPE_DICTIONARY_VALUE_CALL_BACKS,
+        ))
     }
 }
 
@@ -501,6 +540,8 @@ extern "C" {
     static K_CF_ALLOCATOR_NULL: CFAllocatorRef;
     #[link_name = "kCFBooleanTrue"]
     static K_CF_BOOLEAN_TRUE: *const c_void;
+    #[link_name = "kCFBooleanFalse"]
+    static K_CF_BOOLEAN_FALSE: *const c_void;
     #[link_name = "kCFTypeDictionaryKeyCallBacks"]
     static K_CF_TYPE_DICTIONARY_KEY_CALL_BACKS: CFDictionaryKeyCallBacks;
     #[link_name = "kCFTypeDictionaryValueCallBacks"]
@@ -576,6 +617,8 @@ extern "C" {
 
 #[link(name = "VideoToolbox", kind = "framework")]
 extern "C" {
+    #[link_name = "kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder"]
+    static K_VT_ENABLE_HARDWARE_DECODE: CFStringRef;
     fn VTDecompressionSessionCreate(
         allocator: CFAllocatorRef,
         video_format_description: CMFormatDescriptionRef,
@@ -615,7 +658,9 @@ mod tests {
     fn decodes_the_fixture() {
         let aus = access_units(STREAM);
         assert_eq!(aus.len(), 2, "IDR + P");
-        let mut d = Decoder::new().unwrap();
+        // The runner's GPU is paravirtualized: hardware decode crashes
+        // VideoToolbox there, so the fixture decodes in software.
+        let mut d = Decoder::new_software().unwrap();
         let idr = d.decode(&aus[0]).unwrap().expect("a picture out");
         assert_eq!((idr.width(), idr.height()), (64, 64));
         let nv12 = idr.to_nv12();
@@ -627,7 +672,7 @@ mod tests {
 
     #[test]
     fn rejects_units_without_parameter_sets() {
-        let mut d = Decoder::new().unwrap();
+        let mut d = Decoder::new_software().unwrap();
         let err = d.decode(&[0, 0, 1, 0x41, 0x9a, 0x02, 0x05]).unwrap_err();
         assert!(matches!(err, Error::Stream(_)), "{err}");
     }

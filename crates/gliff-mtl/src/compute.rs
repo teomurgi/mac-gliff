@@ -482,7 +482,7 @@ mod tests {
 
         const STREAM: &[u8] = include_bytes!("../../gliff-va/src/h264/testdata/x264-64x64.264");
         let au = &access_units(STREAM)[0];
-        let mut d = Decoder::new().unwrap();
+        let mut d = Decoder::new_software().unwrap();
         let frame = d.decode(au).unwrap().expect("a picture out");
         let nv12 = frame.to_nv12();
         check(&nv12, None, 1);
