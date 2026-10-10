@@ -7,6 +7,8 @@
 
 mod clipboard;
 mod clipboard_ui;
+#[cfg(target_os = "macos")]
+mod glvideo;
 mod keymap;
 mod net;
 mod paintable;
@@ -84,10 +86,19 @@ struct Cli {
 /// Everything the UI shares with its callbacks.
 struct App {
     window: adw::ApplicationWindow,
-    /// The picture, upcast; input controllers attach to it and we measure it.
+    /// The video widget, upcast; input controllers attach to it and we
+    /// measure it. On macOS it is a stack holding the picture the
+    /// texture tiers draw into and the GLArea the Metal tier draws
+    /// into; on Linux, the picture itself.
     video: gtk::Widget,
     /// What the picture shows: the latest frame at an integer scale.
     frame: paintable::FramePaintable,
+    /// The Metal tier's zero-copy display, and the stack switching the
+    /// tiers' widgets (macOS only).
+    #[cfg(target_os = "macos")]
+    gl: Rc<glvideo::GlVideo>,
+    #[cfg(target_os = "macos")]
+    tier_stack: gtk::Stack,
     stats: gtk::Label,
     /// Centred over the picture while the shown session is not streaming:
     /// connecting, reconnecting, an error, or no session at all.
@@ -130,6 +141,14 @@ struct App {
 /// One connection to a machine. Every session keeps streaming while the
 /// window shows another, so switching tabs is instant; only the shown one
 /// gets input.
+/// The frame a macOS session last showed: a GDK texture from the CPU
+/// tier, or the Metal tier's IOSurface frame for the GLArea.
+#[cfg(target_os = "macos")]
+enum CachedFrame {
+    Texture(gdk::Texture),
+    Metal(Rc<gliff_mtl::compute::BgraFrame>),
+}
+
 struct Session {
     /// The tab's name: `user@host`, or the address of a dev `--connect`.
     name: String,
@@ -165,7 +184,10 @@ struct Session {
     /// The output zoom last asked of the decoder; a new worker starts at 1.
     zoom: Cell<u32>,
     /// The latest frame and its view, painted when the tab is shown.
+    #[cfg(target_os = "linux")]
     last_frame: RefCell<Option<(gdk::Texture, (u32, u32))>>,
+    #[cfg(target_os = "macos")]
+    last_frame: RefCell<Option<(CachedFrame, (u32, u32))>>,
     cursor: RefCell<Option<gdk::Cursor>>,
     status: RefCell<String>,
     stats: RefCell<String>,
@@ -337,9 +359,11 @@ fn build_ui(app: &adw::Application, cli: &Cli) {
         .css_classes(["hint"])
         .build();
 
-    // The video is a plain Picture given the whole allocation (Fill); the
-    // paintable places the frame itself at an integer scale, see
-    // paintable::layout.
+    // The texture tier's display: a plain Picture given the whole
+    // allocation (Fill); the paintable places the frame itself at an
+    // integer scale, see paintable::layout. On macOS the Metal tier's
+    // GLArea sits beside it in a stack and is shown when it has the
+    // frame.
     let picture = gtk::Picture::builder()
         .hexpand(true)
         .vexpand(true)
@@ -349,7 +373,25 @@ fn build_ui(app: &adw::Application, cli: &Cli) {
         .build();
     let frame = paintable::FramePaintable::default();
     picture.set_paintable(Some(&frame));
-    let video: gtk::Widget = picture.clone().upcast();
+    #[cfg(target_os = "macos")]
+    let gl = glvideo::GlVideo::new();
+    #[cfg(target_os = "macos")]
+    let tier_stack = {
+        let stack = gtk::Stack::new();
+        stack.set_css_classes(&["video"]);
+        stack.add_named(&picture, Some("texture"));
+        stack.add_named(gl.widget(), Some("gl"));
+        stack.set_visible_child_name("texture");
+        stack
+    };
+    let video: gtk::Widget = {
+        #[cfg(target_os = "macos")]
+        {
+            tier_stack.clone().upcast()
+        }
+        #[cfg(target_os = "linux")]
+        picture.clone().upcast()
+    };
 
     let transfers = Rc::new(clipboard_ui::TransferBars::new());
     let overlay = gtk::Overlay::new();
@@ -376,6 +418,10 @@ fn build_ui(app: &adw::Application, cli: &Cli) {
         window: window.clone(),
         video: video.clone(),
         frame,
+        #[cfg(target_os = "macos")]
+        gl,
+        #[cfg(target_os = "macos")]
+        tier_stack,
         stats: stats.clone(),
         status: status.clone(),
         hint,
@@ -820,6 +866,23 @@ fn show_session(ui: &Rc<App>, s: &Rc<Session>) {
     ui.window.set_title(Some(&window_title(&s.endpoint)));
     show_status(ui, &s.status.borrow());
     ui.stats.set_text(&s.stats.borrow());
+    #[cfg(target_os = "macos")]
+    match &*s.last_frame.borrow() {
+        Some((CachedFrame::Metal(f), view)) => {
+            ui.gl.set_frame(f.clone(), ui.video.scale_factor(), *view);
+            ui.tier_stack.set_visible_child_name("gl");
+        }
+        Some((CachedFrame::Texture(texture), view)) => {
+            ui.frame
+                .set_frame(texture.clone(), ui.video.scale_factor(), *view);
+            ui.tier_stack.set_visible_child_name("texture");
+        }
+        None => {
+            ui.frame.clear();
+            ui.gl.clear();
+        }
+    }
+    #[cfg(target_os = "linux")]
     match &*s.last_frame.borrow() {
         Some((texture, view)) => {
             ui.frame
@@ -843,6 +906,8 @@ fn show_nothing(ui: &Rc<App>) {
     show_status(ui, "Not connected");
     ui.stats.set_text("");
     ui.frame.clear();
+    #[cfg(target_os = "macos")]
+    ui.gl.clear();
     ui.video.set_cursor(None);
     refresh_tabs(ui);
 }
@@ -957,6 +1022,8 @@ fn show_disconnected(ui: &Rc<App>, s: &Rc<Session>) {
     set_stats(ui, s, "");
     if is_active(ui, s) {
         ui.frame.clear();
+        #[cfg(target_os = "macos")]
+        ui.gl.clear();
         ui.video.set_cursor(None);
     }
 }
@@ -1050,49 +1117,67 @@ fn poll_frames(ui: Rc<App>, s: Rc<Session>, rx: Receiver<Picture>, generation: u
             }
         }
         if let Some(p) = latest {
-            match frame_texture(p.frame) {
-                Ok(texture) => {
-                    // Geometry follows the frame that really paints, so the
-                    // pointer never maps against a picture that is not on
-                    // screen (a newer config, or a failed import).
-                    s.stream_size.set(p.stream);
-                    s.stream_view.set(p.view);
-                    s.stream_scale.set((p.scale_milli.max(1) as f32) / 1000.0);
-                    if is_active(&ui, &s) {
-                        ui.frame
-                            .set_frame(texture.clone(), ui.video.scale_factor(), p.view);
-                    }
-                    *s.last_frame.borrow_mut() = Some((texture, p.view));
-                }
-                Err(e) => tracing::warn!(error = %e, "frame texture import failed"),
+            // Geometry follows the frame that really paints, so the
+            // pointer never maps against a picture that is not on
+            // screen (a newer config, or a failed import).
+            if show_frame(&ui, &s, p.frame, p.view) {
+                s.stream_size.set(p.stream);
+                s.stream_view.set(p.view);
+                s.stream_scale.set((p.scale_milli.max(1) as f32) / 1000.0);
             }
         }
         glib::ControlFlow::Continue
     });
 }
 
+/// Show one frame on the video display; `false` when it could not be
+/// shown. On macOS the Metal tier draws zero-copy through the GLArea;
+/// every other tier goes through a `gdk::Texture` as on Linux.
+fn show_frame(ui: &Rc<App>, s: &Rc<Session>, frame: Frame, view: (u32, u32)) -> bool {
+    #[cfg(target_os = "macos")]
+    if let Frame::Metal(f) = frame {
+        let f = Rc::new(f);
+        if is_active(ui, s) {
+            ui.gl.set_frame(f.clone(), ui.video.scale_factor(), view);
+            ui.tier_stack.set_visible_child_name("gl");
+        }
+        *s.last_frame.borrow_mut() = Some((CachedFrame::Metal(f), view));
+        return true;
+    }
+    match frame_texture(frame) {
+        Ok(texture) => {
+            if is_active(ui, s) {
+                ui.frame
+                    .set_frame(texture.clone(), ui.video.scale_factor(), view);
+                #[cfg(target_os = "macos")]
+                ui.tier_stack.set_visible_child_name("texture");
+            }
+            #[cfg(target_os = "linux")]
+            let cached = texture.clone();
+            #[cfg(target_os = "macos")]
+            let cached = CachedFrame::Texture(texture.clone());
+            *s.last_frame.borrow_mut() = Some((cached, view));
+            true
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "frame texture import failed");
+            false
+        }
+    }
+}
+
 /// Wrap a decoded frame as a GDK texture: the GPU tier's dmabuf import
-/// (Linux) or Metal readback (macOS), a plain memory texture for the
-/// CPU tier.
+/// on Linux, a plain memory texture for the CPU tier. On macOS the
+/// Metal tier never lands here; the GL widget draws it.
 fn frame_texture(f: Frame) -> Result<gdk::Texture, glib::Error> {
     match f {
         #[cfg(target_os = "linux")]
         Frame::Dmabuf(f) => dmabuf_texture(f),
         #[cfg(target_os = "macos")]
-        Frame::Metal(f) => {
-            let (w, h) = (
-                f.width as usize * f.zoom as usize,
-                f.height as usize * f.zoom as usize,
-            );
-            let bytes = glib::Bytes::from_owned(f.to_bgra());
-            Ok(gdk::MemoryTexture::new(
-                w as i32,
-                h as i32,
-                gdk::MemoryFormat::B8g8r8x8,
-                &bytes,
-                w * 4,
-            )
-            .upcast())
+        Frame::Metal(_) => {
+            // show_frame routes Metal frames to the GLArea before
+            // any texture conversion happens.
+            unreachable!("Metal frames are drawn by the GL widget")
         }
         Frame::Bgra(f) => {
             let bytes = glib::Bytes::from_owned(f.pixels);
@@ -1851,6 +1936,8 @@ fn install_resize_handler(ui: &Rc<App>) {
     glib::timeout_add_local(Duration::from_millis(100), move || {
         let scale = ui.video.scale_factor();
         ui.frame.set_scale(scale);
+        #[cfg(target_os = "macos")]
+        ui.gl.set_scale(scale);
         request_zoom(&ui);
         let (w, h) = (ui.video.width() * scale, ui.video.height() * scale);
         let size = (w.max(0) as u32 & !1, h.max(0) as u32 & !1);

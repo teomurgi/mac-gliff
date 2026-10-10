@@ -21,12 +21,15 @@ that still apply.
 - [x] **Wire into the client** (`crates/gliff`): a `VideoDecoder::Metal`
   arm behind `cfg(target_os = "macos")`, `gliff-vk` / `hypr-capture` /
   `hypr-input` (and the unused `hypr-ipc`, `drm-fourcc`) gated to Linux,
-  and a `Frame::Metal` variant the UI wraps as a GDK texture. The
-  client builds and runs on macOS; decode is VT+Metal end to end, with
-  a CPU-tier readback into GTK for now.
-- [ ] **Display**: the video widget on macOS — GTK4 has no IOSurface
-  path; the plan is `gtk::GLArea` + `CVOpenGLTextureCache` sharing the
-  same IOSurface Metal writes.
+  and a `Frame::Metal` variant. The client builds and runs on macOS;
+  decode is VT+Metal end to end with the CPU tier as fallback.
+- [x] **Display, zero-copy**: the recombine writes into an IOSurface,
+  and a `gtk::GLArea` video widget binds that same storage with
+  `CGLTexImageIOSurface2D` (the `CVOpenGLTextureCache` plan does not
+  apply — it wants a `CVImageBuffer`, not a bare IOSurface) and draws
+  it through the paintable's layout math, so pointer mapping and zoom
+  are identical across tiers. The `glvideo` example verifies the
+  framebuffer against the decoded pixels: delta 0.
 - [ ] **Input**: a kVK → evdev keycode table (both positional) plus
   shipping an xkb keymap derived from the active macOS input source.
 - [ ] Packaging (Homebrew), codesigning.

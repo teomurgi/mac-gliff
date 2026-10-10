@@ -19,48 +19,45 @@ port. `docs/` holds upstream architecture notes that still apply —
 read `docs/architecture.md` first if you touch the client.
 
 ## Current state (milestones 1 and 2 complete)
+## Current state (milestones 1–3 complete)
 
 **Milestone 1** — `crates/gliff-mtl`, the standalone macOS GPU tier:
+avcc/display (portable, oracle-tested), `vt` (VideoToolbox session,
+hardware default + `new_software()`), `compute` (Metal recombine),
+`client` (the client-facing facade: `Gpu::open()` + `Decoder` mirroring
+`gliff-vk`'s decoder surface; VM detection via `sysctl
+hw.model`). The recombine writes into a fresh **IOSurface** each frame
+(`IOSurfaceCreate` + the `newTextureWithDescriptor:iosurface:plane:`
+message, raw FFI) and `BgraFrame` carries the surface + row stride;
+it is `unsafe impl Send` (the writing command buffer has completed).
 
-| Module | What | Verified by |
-|---|---|---|
-| `avcc` | Annex B NAL split, SPS/PPS extraction, AVCC framing, `access_units()` fixture helper | unit tests on both OSes |
-| `display` | CPU recombine reference (dual420/single420, zoom) | matches `gliff-proto::color` oracle, ≤1 LSB |
-| `vt` | VideoToolbox decoder session, raw C FFI, hardware default + `new_software()` for VMs | decodes the x264 fixture (IDR + P, 64×64 NV12) |
-| `compute` | Metal compute recombine, `CVMetalTextureCache` zero-copy input, shader-from-source, fast math off | shader output matches `display` ≤1 LSB, incl. VT→Metal full-pipeline test |
-| `client` | the client-facing facade: `Gpu::open()` + `Decoder` mirroring `gliff-vk`'s decoder surface (decode/redraw/set_zoom/zoom), VM detection via `sysctlbyname("hw.model")` picking software VT | 6 tests incl. dual-pair, zoom+redraw, parameter-sets-only; the `#[ignore]`d hardware test passes on a real Mac |
+**Milestone 2** — the client is wired: `VideoDecoder::Metal` +
+`Frame::Metal` in `net.rs` (cfg arms; the Linux arms are textual
+copies), per-OS `open_gpu`/`new_decoder` with CPU fallback, the unused
+`hypr-ipc`/`drm-fourcc` dropped, the keymap watcher Linux-only.
 
-`compute::BgraFrame` is `unsafe impl Send` (documented contract: the
-writing command buffer has completed; only read/drop it cross-thread) —
-frames cross worker→GTK via the picture channel.
+**Milestone 3** — zero-copy display: `crates/gliff/src/glvideo.rs` (a
+`gtk::GLArea` widget) binds each frame's IOSurface with
+`CGLTexImageIOSurface2D` and draws it through `paintable::layout`, so
+the rectangle, pointer mapping and zoom request match the texture
+tiers exactly. `main.rs` routes `Frame::Metal` frames to it (session
+`last_frame` caches `Rc<BgraFrame>` for tab switches); Bgra frames
+still go through the paintable. Verified on this real Mac by
+`cargo run -p gliff --example glvideo`, which decodes the fixture
+through the client's own widget and compares the GL framebuffer with
+the decoded pixels: **delta 0, both frames**.
 
-**Milestone 2** — the client (`crates/gliff`) is wired and runs on macOS:
+Everything green on this machine: `cargo test -p gliff -p gliff-mtl`
+(34 + 20 tests + 1 ignored hardware-VT test, which passes),
+`cargo clippy -p gliff -p gliff-mtl -p gliff-sw --all-targets --
+-D warnings`, `cargo fmt --check`, `gliff --help`, and the
+`glvideo` example above. A full client run still needs a Linux box
+running `gliff-server --listen`.
 
-- `net.rs`: `VideoDecoder::Metal` arm (`cfg(target_os = "macos")`),
-  per-OS `open_gpu`/`new_decoder` (Metal falls back to the CPU tier),
-  `Frame::Metal(gliff_mtl::compute::BgraFrame)` variant, cfg'd decode /
-  zoom-redraw / drain arms, `Frame::is_gpu()` +
-  `VideoDecoder::returns_just_fed()` replacing the old `matches!`s.
-  The Linux arms are textual copies of the originals under cfg.
-- `main.rs`: `frame_texture` wraps the Metal frame via `to_bgra()`
-  readback into `gdk::MemoryTexture` (one copy; zero-copy display is
-  the next milestone); `dmabuf_texture` and the `gliff_vk` import are
-  Linux-only.
-- `keymap.rs`: the `hypr_input` watcher is Linux-only; macOS ships an
-  empty keymap (server defaults) until the input milestone.
-- `gliff/Cargo.toml`: `gliff-vk`/`hypr-capture`/`hypr-input` under
-  `[target.'cfg(target_os = "linux")'.dependencies]`, `gliff-mtl` under
-  macOS; dropped unused `hypr-ipc` and `drm-fourcc`.
-- `gliff-sw`: 8 mechanical `chunks_exact` → `as_chunks` conversions —
-  clippy 1.99's `chunks_exact_to_as_chunks` fires on `-D warnings`.
-  Same for `has_visible_shape` in `main.rs`.
-- Verified on this real Mac: `cargo test -p gliff-mtl` (19 + 1
-  ignored), `-- --ignored` (hardware VT pipeline, ≤1 LSB vs reference),
-  `cargo clippy -p gliff -p gliff-sw -p gliff-mtl --all-targets
-  -- -D warnings`, `cargo fmt`, and `gliff --help` from a debug build.
+Hardware VideoToolbox decode is confirmed on real hardware (the
+ignored `hardware_pipeline_matches_the_reference` test passes, ≤1 LSB
+vs the reference).
 
-**Hardware VideoToolbox decode is confirmed on real hardware** — the
-open question from the previous handoff is closed.
 
 ## Set up on a real Mac
 
@@ -126,6 +123,25 @@ Decoding real gliff server output needs a Linux box running
   `#[ignore]`d hardware test is the real-Mac check.
 - Error codes: CMBlockBuffer `-12704` = BadLengthParameter (missing
   offset/dataLength args), `-12705` = BadPointerParameter.
+- `CVOpenGLTextureCacheCreateTextureFromImage` takes a **CVImageBuffer**,
+  not a bare IOSurface (returns kCVReturnInvalidArgument = -6661). The
+  zero-copy GL path for a raw IOSurface is
+  `CGLTexImageIOSurface2D(ctx, GL_TEXTURE_RECTANGLE, GL_RGBA8, w, h,
+  GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, surface, 0)` — deprecated in
+  spirit, works pixel-exact. GTK 4.24's GLArea on macOS gives a real
+  desktop CGL context (#version 150 core shaders).
+- The GLArea framebuffer is the allocation in device pixels, but the
+  widget queries `GL_VIEWPORT` (as GTK left it) instead of guessing.
+  With the quad's uv flipped for the IOSurface's top-down rows
+  (`uv.y = (2 - pos.y) * 0.5 * tex_size`) the picture lands upright,
+  GL bottom row = image bottom row.
+- GUI code must run on the process **main thread** (AppKit): a
+  `#[test]` that opens a GTK window aborts with "Rust cannot catch
+  foreign exceptions" because the test harness thread isn't main.
+  That is why the display smoke is an example
+  (`cargo run -p gliff --example glvideo`), which `#[path]`-includes
+  the client's own `glvideo.rs`/`paintable.rs` (the client is a
+  binary crate; examples cannot import from it otherwise).
 
 **Repo/tooling facts**:
 
@@ -148,23 +164,17 @@ Decoding real gliff server output needs a Linux box running
 
 ## Remaining milestones (README has the checklist)
 
-1. **Display zero-copy**: `gtk::GLArea` + `CVOpenGLTextureCache`
-   sharing the IOSurface Metal writes. Needs IOSurface-backed output
-   textures in `compute` (`device.new_texture_with_descriptor` +
-   IOSurface, not the current plain textures), then `main.rs`'s
-   `frame_texture` Metal arm swaps readback for the GLArea path.
-   Risk item; spike first.
-2. **Input**: kVK→evdev table (main.rs sends `hardware_keycode - 8` as
+1. **Input**: kVK→evdev table (main.rs sends `hardware_keycode - 8` as
    evdev codes; GDK on macOS reports `kVK_*`) plus shipping an xkb
    keymap compiled from the active input source (`keymap.rs` currently
    sends none).
-3. **Packaging**: Homebrew formula, codesigning.
+2. **Packaging**: Homebrew formula, codesigning.
 
 Also known polish, not blockers: `--video gpu` help text still says
-"Vulkan compute + VA-API" (the string lives in `gliff-sw`'s clap docs);
-Metal recombine allocates a fresh output texture per frame (gliff-vk
-recycles a ring of three); `gliff --help` wording aside, the binary is
-otherwise unexercised against a real server on macOS.
+"Vulkan compute + VA-API" (the string lives in `gliff-sw`'s clap
+docs); the recombine allocates a fresh IOSurface per frame (gliff-vk
+recycles a ring of three); the binary is otherwise unexercised against
+a real gliff server on macOS (needs the Linux box).
 
 ## Repo conventions
 
