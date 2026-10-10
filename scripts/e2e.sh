@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+# End-to-end test for gliff. Must run inside a Hyprland session (it starts a
+# nested Hyprland as the device under test). GPU (Vulkan + VA-API) checks run
+# when the machine has it; the CPU (OpenH264) checks always run.
+#
+# It exercises, and asserts PASS on:
+#   1. gliff-probe protocols / gpu / surfaces / encode-decode round-trips (GPU + CPU)
+#   2. gliff-probe pipeline: capture one frame and run the whole 4:4:4 path
+#   3. server --listen --headless  + serve-test client  (Dual420 4:4:4, GPU)
+#   4. server --listen --headless --low-bandwidth + serve-test (Single420, GPU)
+#   5. the CPU tier matrix: cpu<->cpu, gpu server -> cpu client, cpu server ->
+#      gpu client
+#   6. text clipboard in both directions
+#   7. mirrored output resize
+#   8. a 1 MiB binary clipboard item in both directions (chunked)
+#   9. copied files (a directory tree) in both directions, via the spool
+#  10. a keymap sent mid-session is the one the compositor serves its clients
+#
+# Exits non-zero on the first failure.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+fail() { echo "E2E FAIL: $*" >&2; cleanup; exit 1; }
+PIDS=()
+NEST_SIG=""
+cleanup() {
+    for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done
+    [ -n "$NEST_SIG" ] && pkill -9 -f "Hyprland .*e2e-hypr.lua" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+command -v Hyprland >/dev/null || fail "Hyprland not found"
+[ -n "${WAYLAND_DISPLAY:-}" ] || fail "run inside a Wayland (Hyprland) session"
+
+echo "== building (release) =="
+cargo build --release --workspace >/dev/null 2>&1 || fail "build failed"
+PROBE=target/release/gliff-probe
+SERVER=target/release/gliff-server
+
+echo "== starting nested Hyprland =="
+CONF=$(mktemp --suffix=-e2e-hypr.lua)
+# The detailed default wallpaper gives every run the same demanding frame.
+cat > "$CONF" <<HYPR
+hl.monitor({ output = "", mode = "1280x800", position = "auto", scale = 1 })
+hl.config({
+    misc = {
+        force_default_wallpaper = 2,
+        disable_splash_rendering = true,
+    },
+    ecosystem = {
+        no_update_news = true,
+        no_donation_nag = true,
+    },
+})
+HYPR
+before=$(ls "$XDG_RUNTIME_DIR/hypr" 2>/dev/null)
+WAYLAND_DISPLAY="$WAYLAND_DISPLAY" HYPRLAND_INSTANCE_SIGNATURE= setsid Hyprland -c "$CONF" >/tmp/gliff-e2e-hypr.log 2>&1 &
+sleep 6
+# The nested instance is the directory that was not there before we started it.
+NEST_SIG=$(comm -13 <(echo "$before" | sort) <(ls "$XDG_RUNTIME_DIR/hypr" | sort) | head -1)
+[ -n "$NEST_SIG" ] || fail "nested Hyprland did not start"
+export HYPRLAND_INSTANCE_SIGNATURE="$NEST_SIG"
+export WAYLAND_DISPLAY=$(sed -n 2p "$XDG_RUNTIME_DIR/hypr/$NEST_SIG/hyprland.lock")
+echo "   nested sig $NEST_SIG on $WAYLAND_DISPLAY"
+
+damage() { for i in $(seq 1 80); do hyprctl notify 1 200 0 "e2e $i" >/dev/null 2>&1; sleep 0.1; done; }
+
+echo "== 1. probe checks =="
+$PROBE --instance "$NEST_SIG" protocols 2>/dev/null | grep -q "^PASS" || fail "protocols"
+if $PROBE gpu 2>/dev/null | grep -q "^PASS VA-API H.264 encode"; then
+    HAS_GPU=1
+    CLIENT_VIDEO=gpu
+else
+    HAS_GPU=0
+    CLIENT_VIDEO=cpu
+    echo "   no GPU tier on this machine; GPU checks are skipped"
+fi
+if [ "$HAS_GPU" = 1 ]; then
+    $PROBE surfaces 2>/dev/null | grep -q "^PASS Vulkan split" || fail "VA-API surface hand-off"
+    $PROBE roundtrip 2>/dev/null | grep -q "^PASS min RGB PSNR" || fail "GPU codec round-trip"
+fi
+$PROBE --video cpu roundtrip 2>/dev/null | grep -q "^PASS min RGB PSNR" || fail "CPU codec round-trip"
+echo "   probe checks PASS"
+
+echo "== 2. capture->4:4:4 pipeline =="
+# A fresh output per run: an idle headless output does not render again, so
+# a second capture on the same output can wait past the probe's deadline.
+run_pipeline() {
+    local video=$1
+    hyprctl output create headless e2ecap >/dev/null 2>&1
+    sleep 1
+    local HN
+    HN=$(hyprctl monitors -j | python3 -c "import sys,json;print(next((m['name'] for m in json.load(sys.stdin) if 'e2ecap' in m['name'] or m['name']=='e2ecap'),''))")
+    local pipe
+    pipe=$($PROBE --instance "$NEST_SIG" --video "$video" pipeline --output "${HN:-e2ecap}" 2>/dev/null)
+    hyprctl output remove "${HN:-e2ecap}" >/dev/null 2>&1
+    echo "$pipe" | grep -q "^PASS" || fail "4:4:4 pipeline ($video)"
+    echo "$pipe" | grep -q "^FAIL" && fail "4:4:4 pipeline ($video) ($(echo "$pipe" | grep '^FAIL' | head -1))"
+}
+[ "$HAS_GPU" = 1 ] && run_pipeline gpu
+run_pipeline cpu
+echo "   pipeline PASS"
+
+run_server_test() {
+    local port=$1; shift
+    local label=$1; shift
+    local client_video=$1; shift
+    "$SERVER" --listen "127.0.0.1:$port" --headless --instance "$NEST_SIG" "$@" >/tmp/gliff-e2e-server.log 2>&1 &
+    local sp=$!; PIDS+=("$sp")
+    sleep 2
+    damage & local dp=$!; PIDS+=("$dp")
+    local out
+    out=$(timeout 30 $PROBE --video "$client_video" serve-test --connect "127.0.0.1:$port" --frames 8 2>&1)
+    kill "$dp" 2>/dev/null; kill "$sp" 2>/dev/null; sleep 1
+    echo "$out" | grep -q "^PASS" || fail "$label ($(echo "$out" | tail -1))"
+    echo "$out" | grep -q "^FAIL" && fail "$label ($(echo "$out" | grep '^FAIL' | head -1))"
+    echo "   $label PASS"
+}
+
+if [ "$HAS_GPU" = 1 ]; then
+    echo "== 3. server + client, Dual420 =="
+    run_server_test 9040 "Dual420 stream" gpu
+
+    echo "== 4. server + client, Single420 (--low-bandwidth) =="
+    run_server_test 9041 "Single420 stream" gpu --low-bandwidth
+else
+    echo "== 3./4. GPU server tests skipped (no GPU tier) =="
+fi
+
+echo "== 4b. CPU tier matrix =="
+run_server_test 9044 "cpu server -> cpu client" cpu --video cpu
+if [ "$HAS_GPU" = 1 ]; then
+    run_server_test 9045 "gpu server -> cpu client" cpu
+    run_server_test 9046 "cpu server -> gpu client" gpu --video cpu
+fi
+
+echo "== 6. text clipboard both directions =="
+command -v wl-copy >/dev/null && command -v wl-paste >/dev/null || fail "wl-clipboard not installed"
+# The probe offers its item after a few frames and requests the compositor's
+# item on its own. Wait for both before pasting and killing anything.
+wait_type() { for i in $(seq 1 60); do wl-paste -l 2>/dev/null | grep -qx "$1" && return 0; sleep 0.25; done; return 1; }
+wait_recv() { for i in $(seq 1 60); do grep -q "$1" "$2" && return 0; sleep 0.25; done; return 1; }
+wl-copy "e2e-clip-in" 2>/dev/null
+"$SERVER" --listen 127.0.0.1:9042 --headless --instance "$NEST_SIG" >/tmp/gliff-e2e-server.log 2>&1 &
+csp=$!; PIDS+=("$csp"); sleep 2
+damage & cdp=$!; PIDS+=("$cdp")
+clipf=$(mktemp)
+GLIFF_SEND_CLIP="e2e-clip-out" timeout 20 $PROBE --video "$CLIENT_VIDEO" serve-test --connect 127.0.0.1:9042 --frames 200 >"$clipf" 2>&1 &
+clipc=$!; PIDS+=("$clipc")
+wait_type "text/plain;charset=utf-8" || fail "server never offered the client's text"
+wait_recv "CLIP-RECV:" "$clipf" || fail "client never received the compositor's text"
+pasted=$(wl-paste -n 2>/dev/null)
+kill "$clipc" "$cdp" "$csp" 2>/dev/null
+grep -q "CLIP-RECV: e2e-clip-in" "$clipf" || fail "compositor->client clipboard (got: $(grep CLIP-RECV "$clipf"))"
+[ "$pasted" = "e2e-clip-out" ] || fail "client->compositor clipboard (got: $pasted)"
+rm -f "$clipf"
+echo "   clipboard both directions PASS"
+
+echo "== 7. mirrored output resize =="
+set_monitor() { hyprctl eval "hl.monitor({ output = \"$1\", mode = \"$2\", position = \"auto\", scale = 1 })" >/dev/null 2>&1; }
+hyprctl output create headless e2emirror >/dev/null 2>&1
+sleep 1
+mirror=$(hyprctl monitors -j | python3 -c "import sys,json; print(next(m['name'] for m in json.load(sys.stdin) if 'e2emirror' in m['name']))")
+set_monitor "$mirror" 1280x800@60
+sleep 1
+"$SERVER" --listen 127.0.0.1:9043 --output "$mirror" --instance "$NEST_SIG" >/tmp/gliff-e2e-mirror-server.log 2>&1 &
+msp=$!; PIDS+=("$msp"); sleep 1
+damage & mdp=$!; PIDS+=("$mdp")
+mirror_log=$(mktemp)
+timeout 30 "$PROBE" --video "$CLIENT_VIDEO" serve-test --connect 127.0.0.1:9043 --frames 30 >"$mirror_log" 2>&1 &
+mcp=$!; PIDS+=("$mcp")
+wait_for_mirror() {
+    local pattern=$1
+    for ((attempt = 0; attempt < 100; attempt++)); do
+        grep -q "$pattern" "$mirror_log" && return 0
+        kill -0 "$mcp" 2>/dev/null || break
+        sleep 0.1
+    done
+    fail "mirror resize: missing '$pattern' (log: $mirror_log)"
+}
+wait_for_mirror 'first decoded frame ok'
+set_monitor "$mirror" 640x480@60
+wait_for_mirror 'reconfig to 640x480'
+set_monitor "$mirror" 1024x768@60
+wait_for_mirror 'reconfig to 800x600'
+wait "$mcp" || fail "mirror resize: probe failed (log: $mirror_log)"
+grep -q '^PASS decoded 30 frames' "$mirror_log" || fail "mirror resize: frames stopped (log: $mirror_log)"
+grep -q '^FAIL' "$mirror_log" && fail "mirror resize: failed assertion (log: $mirror_log)"
+kill "$mdp" "$msp" 2>/dev/null
+hyprctl output remove "$mirror" >/dev/null 2>&1
+echo "   mirrored output resize PASS"
+
+echo "== 8. binary clipboard both directions (1 MiB, chunked) =="
+blob=$(mktemp); head -c 1048576 /dev/urandom >"$blob"
+recvf=$(mktemp); outf=$(mktemp)
+wl-copy --type application/octet-stream <"$blob" 2>/dev/null
+"$SERVER" --listen 127.0.0.1:9047 --headless --instance "$NEST_SIG" >/tmp/gliff-e2e-server.log 2>&1 &
+bsp=$!; PIDS+=("$bsp"); sleep 2
+damage & bdp=$!; PIDS+=("$bdp")
+clipf=$(mktemp)
+GLIFF_SEND_CLIP_FILE="$blob" GLIFF_RECV_CLIP_FILE="$recvf" timeout 20 $PROBE --video "$CLIENT_VIDEO" serve-test --connect 127.0.0.1:9047 --frames 200 >"$clipf" 2>&1 &
+bclipc=$!; PIDS+=("$bclipc")
+wait_type "application/octet-stream" || fail "server never offered the client's binary item"
+wait_recv "CLIP-RECV-FILE:" "$clipf" || fail "client never received the compositor's binary item"
+wl-paste --type application/octet-stream >"$outf" 2>/dev/null
+kill "$bclipc" "$bdp" "$bsp" 2>/dev/null
+grep -q "CLIP-RECV-FILE: 1048576 bytes" "$clipf" || fail "compositor->client binary clipboard (got: $(grep CLIP-RECV "$clipf"))"
+cmp -s "$blob" "$recvf" || fail "compositor->client binary clipboard differs"
+cmp -s "$blob" "$outf" || fail "client->compositor binary clipboard differs ($(stat -c %s "$outf") bytes)"
+rm -f "$clipf" "$blob" "$recvf" "$outf"
+echo "   binary clipboard both directions PASS"
+
+echo "== 9. copied files both directions (spooled) =="
+srcd=$(mktemp -d); mkdir -p "$srcd/photos/sub"
+head -c 300000 /dev/urandom >"$srcd/photos/a.bin"; echo "hello" >"$srcd/photos/sub/b.txt"; echo "solo" >"$srcd/solo.txt"
+recvd=$(mktemp -d)
+printf 'file://%s\r\nfile://%s\r\n' "$srcd/photos" "$srcd/solo.txt" | wl-copy --type text/uri-list 2>/dev/null
+"$SERVER" --listen 127.0.0.1:9048 --headless --instance "$NEST_SIG" >/tmp/gliff-e2e-server.log 2>&1 &
+fsp=$!; PIDS+=("$fsp"); sleep 2
+damage & fdp=$!; PIDS+=("$fdp")
+clipf=$(mktemp)
+GLIFF_SEND_CLIP_FILES="$srcd/photos:$srcd/solo.txt" GLIFF_RECV_CLIP_DIR="$recvd" timeout 20 $PROBE --video "$CLIENT_VIDEO" serve-test --connect 127.0.0.1:9048 --frames 200 >"$clipf" 2>&1 &
+fclipc=$!; PIDS+=("$fclipc")
+wait_type "text/uri-list" || fail "server never offered the client's files"
+wait_recv "CLIP-RECV-FILES:" "$clipf" || fail "client never received the compositor's files"
+pasted_uris=$(wl-paste --type text/uri-list 2>/dev/null | tr -d '\r')
+kill "$fclipc" "$fdp" "$fsp" 2>/dev/null
+grep -q "CLIP-RECV-FILES: 5 entries" "$clipf" || fail "compositor->client files (probe said: $(grep -iE 'clip|offer|serv|error|panick' "$clipf" | tail -8 | tr '\n' ' '); server said: $(grep -iE 'clip|warn' /tmp/gliff-e2e-server.log | tail -5 | tr '\n' ' '))"
+cmp -s "$srcd/photos/a.bin" "$recvd/photos/a.bin" && cmp -s "$srcd/photos/sub/b.txt" "$recvd/photos/sub/b.txt" && cmp -s "$srcd/solo.txt" "$recvd/solo.txt" || fail "compositor->client files differ"
+spool=$(echo "$pasted_uris" | head -1 | sed 's|^file://||; s|/photos$||')
+[ -n "$spool" ] && [ -d "$spool/photos" ] || fail "client->compositor files: no spool in URI list (got: $pasted_uris)"
+cmp -s "$srcd/photos/a.bin" "$spool/photos/a.bin" && cmp -s "$srcd/photos/sub/b.txt" "$spool/photos/sub/b.txt" && cmp -s "$srcd/solo.txt" "$spool/solo.txt" || fail "client->compositor files differ"
+rm -rf "$spool"
+rm -rf "$clipf" "$srcd" "$recvd"
+echo "   copied files both directions PASS"
+
+echo "== 10. client keymap reaches compositor clients =="
+"$SERVER" --listen 127.0.0.1:9049 --headless --instance "$NEST_SIG" >/tmp/gliff-e2e-server.log 2>&1 &
+ksp=$!; PIDS+=("$ksp"); sleep 2
+damage & kdp=$!; PIDS+=("$kdp")
+keyf=$(mktemp); kout=$(mktemp)
+$PROBE --instance "$NEST_SIG" keymap --secs 12 --caps Control_L >"$kout" 2>&1 &
+kwatch=$!; PIDS+=("$kwatch"); sleep 1
+GLIFF_SEND_KEYMAP_OPTIONS=ctrl:nocaps timeout 10 $PROBE --video "$CLIENT_VIDEO" serve-test --connect 127.0.0.1:9049 --frames 60 >"$keyf" 2>&1 \
+    || fail "keymap client ($(tail -3 "$keyf" | tr '\n' ' '))"
+wait "$kwatch"
+kill "$kdp" "$ksp" 2>/dev/null
+grep -q "^PASS" "$kout" || fail "client keymap not served ($(tr '\n' ' ' <"$kout"); client said: $(tail -3 "$keyf" | tr '\n' ' '))"
+rm -f "$keyf" "$kout"
+echo "   client keymap PASS"
+
+echo "E2E PASS: all checks passed"

@@ -1,0 +1,6 @@
+target/
+*.png
+!/.github/assets/*.png
+/pkgbuild/pkg/
+/pkgbuild/src/
+*.pkg.tar.zst
