@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/gliff-proto",
     "crates/gliff-transport",
+    "crates/gliff-mtl",
     "crates/hypr-ipc",
     "crates/hypr-wl",
     "crates/hypr-capture",
