@@ -428,11 +428,27 @@ mod tests {
             .to_bgra();
         let want = display::to_bgra(main, aux, zoom);
         assert_eq!(got.len(), want.len());
-        assert!(
-            max_delta(&got, &want) <= 1,
-            "delta {}",
-            max_delta(&got, &want)
-        );
+        let delta = max_delta(&got, &want);
+        if delta > 1 {
+            let at = got
+                .iter()
+                .zip(&want)
+                .position(|(g, w)| (i32::from(*g) - i32::from(*w)).abs() > 1)
+                .unwrap_or(0);
+            let hex = |b: &[u8]| -> String {
+                b.iter()
+                    .map(|x| format!("{x:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            eprintln!(
+                "device {:?} first-mismatch byte {at} delta {delta}\n  got  {}\n  want {}",
+                r.device().name(),
+                hex(&got[..32.min(got.len())]),
+                hex(&want[..32.min(want.len())]),
+            );
+        }
+        assert!(delta <= 1, "delta {delta}");
     }
 
     #[test]
