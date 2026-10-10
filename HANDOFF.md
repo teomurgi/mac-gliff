@@ -155,7 +155,39 @@ Decoding real gliff server output needs a Linux box running
   polled on the main thread every 2 s — TIS is another main-thread
   API; the initial keymap is sent synchronously so a session's 1 s
   first-keymap wait always catches it.
-
+- **The macOS clipboard deadlock (fixed, verified live)**: a lazy
+  `gdk::ContentProvider` subclass cannot serve the macOS pasteboard.
+  When anything reads the clipboard (a clipboard manager does so the
+  instant it changes), GTK's macOS backend fulfils the paste with a
+  nested main loop on a **private** context, but gdk4-rs spawns
+  `write_mime_type_future` on the **default** context
+  (gdk4-0.11.4/src/subclass/content_provider.rs,
+  `content_provider_write_mime_type_async` →
+  `MainContext::default().spawn_local`) — the future is never polled,
+  and the whole UI freezes (beach ball; sample shows
+  `GdkMacosPasteboardItemDataProvider` → nested `g_main_context_iteration`
+  → `g_poll`). The port therefore mirrors the server's offer EAGERLY:
+  `set_remote_offer` fetches every offered mime over the worker
+  (8 MiB cap) and sets plain in-memory `for_bytes` providers; a
+  thread-local marker suppresses the echo and `drop_remote_offer`
+  clears it when the shown session dies. Verified live: `pbpaste`
+  returns the remote clipboard while connected, completes without a
+  hang after the server dies, and the window still renders.
+- **Debugging toolbox for this Mac**: hang → `sample <pid> 2 -file x`;
+  crash → `~/Library/Logs/DiagnosticReports/*.ips` (first line JSON
+  header, rest JSON body; SIGABRT + panic_nounwind = Rust panic inside
+  a glib callback); window shots → `screencapture -x -l <id>` with the
+  window id from a tiny Swift CGWindowList helper; read screenshots by
+  asking the read tool with `?q=` (vision model).
+- **gliff-server 0.3.1 on slimbook (installed at /usr/bin)**:
+  `--listen` serves exactly ONE session and exits when it ends; when a
+  client disconnects, restart the server. Hyprland env for grim:
+  `WAYLAND_DISPLAY=wayland-1` plus the instance signature; `hyprctl
+  dispatch exec` quoting through ssh is unreliable — launch with
+  nohup + the env instead. One unexplained crash remains: a Rust
+  panic inside the `poll_status` callback (abort, crash report
+  gliff-2026-10-11-011752.ips) during a connection-reset retry storm;
+  not reproduced since.
 **Repo/tooling facts**:
 
 - A stale duplicate of the crate used to live at `gliff-mtl/` (repo

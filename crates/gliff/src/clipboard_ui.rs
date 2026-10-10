@@ -1,7 +1,14 @@
 //! The GTK thread's half of the clipboard: watches the local `gdk::Clipboard`
 //! for changes to offer to the server, reads a local item when the server
-//! requests one, and proxies the server's offer as a lazy content provider
-//! whose bytes are fetched only when an application pastes.
+//! requests one, and mirrors the server's offer onto the local clipboard.
+//!
+//! The mirror is eager: the offered mimes are fetched when the offer
+//! arrives and set as plain in-memory providers. A lazy provider whose
+//! data is fetched on paste cannot work on macOS, where the pasteboard
+//! fulfilment runs a nested main loop that never polls the
+//! default-context task gdk4-rs spawns provider futures on — the fetch
+//! would deadlock the whole UI. The eager fetch runs on the ordinary
+//! main loop, where it always progresses.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -10,13 +17,11 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use gtk::gdk;
-use gtk::gio;
 use gtk::gio::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
-use gtk::subclass::prelude::*;
 use gtk4 as gtk;
-use tokio::sync::mpsc::{Sender, UnboundedSender, WeakUnboundedSender};
+use tokio::sync::mpsc::{Sender, UnboundedSender};
 use tokio::sync::oneshot;
 
 use gliff_proto::clipboard::{
@@ -32,12 +37,38 @@ use crate::clipboard::ToWorker;
 /// Longest `text/uri-list` we read to build an offer.
 const URI_LIST_MAX: usize = 1024 * 1024;
 
+/// Most we eagerly fetch of one offered item, so a giant selection
+/// does not transfer when nobody may ever paste it.
+const EAGER_MAX: usize = 8 * 1024 * 1024;
+
 fn clipboard() -> Option<gdk::Clipboard> {
     gdk::Display::default().map(|d| d.clipboard())
 }
 
+thread_local! {
+    /// The in-memory provider our last remote mirror set, so its own
+    /// clipboard change is not echoed back to the server and a dead
+    /// session's mirror can be dropped again.
+    static MIRROR: RefCell<Option<gdk::ContentProvider>> = const { RefCell::new(None) };
+}
+
 fn holds_remote_offer(cb: &gdk::Clipboard) -> bool {
-    cb.content().is_some_and(|p| p.is::<RemoteProvider>())
+    MIRROR.with(|m| {
+        m.borrow()
+            .as_ref()
+            .is_some_and(|ours| cb.content().is_some_and(|c| c == *ours))
+    })
+}
+
+/// Drop the server's clipboard mirror, as when its session ends: the
+/// offered content is unreachable, and on macOS a paste into a dead
+/// mirror would otherwise stall the pasteboard fulfilment.
+pub fn drop_remote_offer() {
+    if let Some(cb) = clipboard() {
+        if holds_remote_offer(&cb) {
+            let _ = cb.set_content(gdk::ContentProvider::NONE);
+        }
+    }
 }
 
 /// Report every change of the local clipboard to the workers, except changes
@@ -189,9 +220,9 @@ pub fn read_local(mime_type: String, reply: Sender<std::io::Result<Bytes>>) {
 }
 
 /// Make the server's offer the local selection, or clear ours for an empty
-/// offer. The provider holds the session's sender weakly: it must not keep
-/// a replaced session's input channel open, or that session never learns
-/// the UI has moved on.
+/// offer. The offered mimes are fetched eagerly (see the module docs: a
+/// lazy provider cannot be served from macOS's pasteboard fulfilment)
+/// and set as one in-memory provider per mime.
 pub fn set_remote_offer(
     tx: &UnboundedSender<ToWorker>,
     serial: u32,
@@ -208,99 +239,71 @@ pub fn set_remote_offer(
         }
         return;
     }
-    let provider = RemoteProvider::new(tx.downgrade(), serial, mimes);
-    if let Err(e) = cb.set_content(Some(&provider)) {
-        tracing::warn!(error = %e, "clipboard proxy not set");
-    }
-}
-
-glib::wrapper! {
-    /// A content provider for the server's offer; each paste fetches the
-    /// item from the server through the worker.
-    pub struct RemoteProvider(ObjectSubclass<imp::RemoteProvider>)
-        @extends gdk::ContentProvider;
-}
-
-impl RemoteProvider {
-    fn new(tx: WeakUnboundedSender<ToWorker>, serial: u32, mime_types: Vec<String>) -> Self {
-        let obj: Self = glib::Object::new();
-        let imp = obj.imp();
-        *imp.tx.borrow_mut() = Some(tx);
-        imp.serial.set(serial);
-        *imp.mime_types.borrow_mut() = mime_types;
-        obj
-    }
-}
-
-mod imp {
-    use super::*;
-    use std::cell::RefCell;
-    use std::future::Future;
-    use std::pin::Pin;
-
-    #[derive(Default)]
-    pub struct RemoteProvider {
-        pub tx: RefCell<Option<WeakUnboundedSender<ToWorker>>>,
-        /// Serial of the offer this provider proxies. A paste echoes it, so
-        /// one racing a newer offer is refused instead of served the wrong
-        /// item.
-        pub serial: Cell<u32>,
-        pub mime_types: RefCell<Vec<String>>,
-    }
-
-    #[glib::object_subclass]
-    impl ObjectSubclass for RemoteProvider {
-        const NAME: &'static str = "GliffRemoteClipboard";
-        type Type = super::RemoteProvider;
-        type ParentType = gdk::ContentProvider;
-    }
-
-    impl ObjectImpl for RemoteProvider {}
-
-    impl ContentProviderImpl for RemoteProvider {
-        fn formats(&self) -> gdk::ContentFormats {
-            let mimes = self.mime_types.borrow();
-            let refs: Vec<&str> = mimes.iter().map(String::as_str).collect();
-            gdk::ContentFormats::new(&refs)
+    // A newer offer that races this fetch simply sets its own content
+    // when it arrives; a fetch for a superseded serial is dropped.
+    let latest = LATEST_OFFER.with(|l| {
+        l.set(serial.max(l.get()));
+        serial
+    });
+    let tx = tx.clone();
+    glib::spawn_future_local(async move {
+        let mut providers = Vec::new();
+        for mime in &mimes {
+            let Some(bytes) = fetch_mime(&tx, latest, mime.clone()).await else {
+                continue;
+            };
+            providers.push(gdk::ContentProvider::for_bytes(
+                mime,
+                &glib::Bytes::from_owned(bytes.to_vec()),
+            ));
         }
-
-        fn write_mime_type_future(
-            &self,
-            mime_type: &str,
-            stream: &gio::OutputStream,
-            io_priority: glib::Priority,
-        ) -> Pin<Box<dyn Future<Output = Result<(), glib::Error>> + 'static>> {
-            let tx = self.tx.borrow().clone();
-            let serial = self.serial.get();
-            let mime_type = mime_type.to_string();
-            let stream = stream.clone();
-            Box::pin(async move {
-                let failed = |m: String| glib::Error::new(gio::IOErrorEnum::Failed, &m);
-                let tx = tx
-                    .and_then(|w| w.upgrade())
-                    .ok_or_else(|| failed("not connected".into()))?;
-                let (sink, mut rx) = tokio::sync::mpsc::channel::<Bytes>(2);
-                let (result_tx, result_rx) = oneshot::channel();
-                tx.send(ToWorker::Fetch {
-                    mime_type,
-                    serial,
-                    sink,
-                    result: result_tx,
-                })
-                .map_err(|_| failed("worker gone".into()))?;
-                while let Some(chunk) = rx.recv().await {
-                    stream
-                        .write_all_future(chunk, io_priority)
-                        .await
-                        .map_err(|(_, e)| e)?;
-                }
-                match result_rx.await {
-                    Ok(Ok(())) => Ok(()),
-                    Ok(Err(e)) => Err(failed(e)),
-                    Err(_) => Err(failed("transfer dropped".into())),
-                }
-            })
+        if providers.is_empty() {
+            return;
         }
+        if LATEST_OFFER.with(|l| l.get()) != latest {
+            return; // a newer offer arrived while fetching
+        }
+        let provider = if providers.len() == 1 {
+            providers.pop().expect("checked non-empty")
+        } else {
+            gdk::ContentProvider::new_union(&providers)
+        };
+        MIRROR.with(|m| *m.borrow_mut() = Some(provider.clone()));
+        if let Err(e) = cb.set_content(Some(&provider)) {
+            tracing::warn!(error = %e, "clipboard mirror not set");
+            MIRROR.with(|m| *m.borrow_mut() = None);
+        }
+    });
+}
+
+thread_local! {
+    /// Serial of the newest offer the mirror is fetching or showing.
+    static LATEST_OFFER: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Fetch one offered mime from the server through the worker, `None`
+/// when unreachable or larger than [`EAGER_MAX`].
+async fn fetch_mime(tx: &UnboundedSender<ToWorker>, serial: u32, mime: String) -> Option<Bytes> {
+    let (sink, mut rx) = tokio::sync::mpsc::channel::<Bytes>(2);
+    let (result_tx, result_rx) = oneshot::channel();
+    tx.send(ToWorker::Fetch {
+        mime_type: mime,
+        serial,
+        sink,
+        result: result_tx,
+    })
+    .ok()?;
+    let mut out = Vec::new();
+    while let Some(chunk) = rx.recv().await {
+        out.extend_from_slice(&chunk);
+        if out.len() > EAGER_MAX {
+            tracing::warn!("offered clipboard item exceeds the eager-fetch cap; not mirrored");
+            return None;
+        }
+    }
+    match result_rx.await {
+        Ok(Ok(())) => Some(Bytes::from(out)),
+        _ => None,
     }
 }
 

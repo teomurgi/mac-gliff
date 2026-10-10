@@ -45,6 +45,7 @@ pub fn watch() -> Keymap {
         // for the first keymap before it lets the server default.
         let initial = layout_id(&input_source_id().unwrap_or_default());
         tracing::debug!(layout = initial, "active keyboard layout");
+        tx.send_replace(keymap_text(initial).to_owned());
         let seen = Rc::new(Cell::new(initial));
         glib::timeout_add_local(Duration::from_secs(2), move || {
             let id = layout_id(&input_source_id().unwrap_or_default());

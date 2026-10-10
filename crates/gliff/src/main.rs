@@ -1016,6 +1016,12 @@ fn show_disconnected(ui: &Rc<App>, s: &Rc<Session>) {
     if s.connected.replace(false) {
         refresh_tabs(ui);
     }
+    // The shown session's clipboard proxy holds unreachable content
+    // now; a paste must not ask it for data (on macOS the pasteboard
+    // fulfilment runs a nested main loop).
+    if is_active(ui, s) {
+        clipboard_ui::drop_remote_offer();
+    }
     s.last_frame.borrow_mut().take();
     s.stream_size.set((0, 0));
     s.stream_view.set((0, 0));
