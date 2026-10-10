@@ -30,4 +30,16 @@ jobs:
       - name: Clippy
         run: cargo clippy ${{ matrix.args }} --all-targets -- -D warnings
       - name: Test
+        if: matrix.os != 'macos-15'
         run: cargo test ${{ matrix.args }}
+      # VideoToolbox crashes somewhere inside VTDecompressionSessionDecodeFrame
+      # on the paravirtualized runner; run the tests under lldb so the
+      # backtrace names the faulting frame.
+      - name: Test (lldb)
+        if: matrix.os == 'macos-15'
+        run: |
+          set -x
+          cargo build -p gliff-mtl --tests
+          BIN=$(find target/debug/deps -maxdepth 1 -name 'gliff_mtl-*' ! -name '*.d' -type f | head -1)
+          lldb -b -o "settings set target.run-args --test-threads=1 vt" -o run -o "bt all" -- "$BIN" || true
+          lldb -b -o "settings set target.run-args --test-threads=1 compute" -o run -o "bt all" -- "$BIN" || true
