@@ -18,7 +18,10 @@ use metal::{
     MTLTextureUsage, Texture, TextureDescriptor, TextureRef,
 };
 
-use crate::vt::CVPixelBufferRef;
+use crate::vt::{
+    CFDictionaryCreate, CFNumberCreate, CVPixelBufferRef, K_CF_TYPE_DICTIONARY_KEY_CALL_BACKS,
+    K_CF_TYPE_DICTIONARY_VALUE_CALL_BACKS,
+};
 use crate::{Error, Result};
 
 const SHADER: &str = include_str!("../shaders/recombine.metal");
@@ -33,35 +36,71 @@ struct Params {
     zoom: u32,
 }
 
-/// One recombined frame: the BGRA8 output texture at `zoom`x, plus the
-/// CoreVideo texture references that must outlive its use.
+/// One recombined frame: the BGRA8 output at `zoom`x, written into an
+/// IOSurface Metal and GL can share, plus the CoreVideo texture
+/// references that must outlive its use.
 pub struct BgraFrame {
     pub texture: Texture,
     /// `CVMetalTextureRef`s backing the sampled planes.
     cv: Vec<*mut c_void>,
+    /// The IOSurface the output pixels live in, retained.
+    surface: *mut c_void,
+    /// Bytes per row on the surface; at least `width*4` (row padding).
+    stride: usize,
     pub width: u32,
     pub height: u32,
     pub zoom: u32,
 }
 
 impl BgraFrame {
-    /// The pixels, for tests and the CPU fallback. Not the streaming
-    /// path: the display side takes the texture.
+    /// The IOSurface holding the pixels, for zero-copy sharing with GL
+    /// (`CVOpenGLTextureCache`). The frame keeps it alive; do not
+    /// release it.
+    pub fn surface(&self) -> *mut c_void {
+        self.surface
+    }
+
+    /// Bytes per row in [`surface`]'s storage.
+    pub fn stride(&self) -> usize {
+        self.stride
+    }
+
+    /// The pixels, tightly packed, for tests and the CPU fallback. Not
+    /// the streaming path: the display side takes the IOSurface.
     pub fn to_bgra(&self) -> Vec<u8> {
         let (w, h) = (
             self.width as usize * self.zoom as usize,
             self.height as usize * self.zoom as usize,
         );
-        let mut out = vec![0u8; w * h * 4];
-        let stride = (w * 4) as u64;
+        let bytes_per_row = w * 4;
         // The texture is not in use: the command buffer that wrote it
         // has completed.
+        if self.stride == bytes_per_row {
+            let mut out = vec![0u8; h * bytes_per_row];
+            self.texture.get_bytes(
+                out.as_mut_ptr() as *mut c_void,
+                bytes_per_row as u64,
+                MTLRegion::new_2d(0, 0, w as u64, h as u64),
+                0,
+            );
+            return out;
+        }
+        // A padded surface: read row by row, then compact. `get_bytes`
+        // needs the destination rows at the surface's stride.
+        let mut padded = vec![0u8; h * self.stride];
         self.texture.get_bytes(
-            out.as_mut_ptr() as *mut c_void,
-            stride,
+            padded.as_mut_ptr() as *mut c_void,
+            self.stride as u64,
             MTLRegion::new_2d(0, 0, w as u64, h as u64),
             0,
         );
+        // Copy the image bytes out of each surface row, dropping the
+        // padding.
+        let mut out = vec![0u8; h * bytes_per_row];
+        for row in 0..h {
+            let src = &padded[row * self.stride..row * self.stride + bytes_per_row];
+            out[row * bytes_per_row..(row + 1) * bytes_per_row].copy_from_slice(src);
+        }
         out
     }
 }
@@ -69,21 +108,25 @@ impl BgraFrame {
 impl Drop for BgraFrame {
     fn drop(&mut self) {
         // SAFETY: the CVMetalTexture references were created by the
-        // texture cache and are released here, after the GPU work.
+        // texture cache and the IOSurface by `output_texture`; each is
+        // released exactly once here, after the GPU work.
         for cv in &self.cv {
             // SAFETY: each reference was created by the texture cache
             // and is released exactly once here.
             unsafe { CFRelease(*cv) };
         }
+        // SAFETY: the surface was retained in `output_texture` and is
+        // released exactly once here.
+        unsafe { CFRelease(self.surface.cast()) };
     }
 }
 
 // SAFETY: a frame crosses from the decode worker to the UI thread only
 // after `dispatch` waited for the command buffer that wrote it, so its
-// texture is complete and thereafter read-only; reading pixels
-// (`getBytes`) and dropping (releasing the IOSurface-backed
-// CVMetalTexture references and the texture) are thread-safe. The frame
-// must not be written to on the consuming thread.
+// texture and IOSurface are complete and thereafter read-only; reading
+// pixels (`getBytes`) or handing the IOSurface to GL, and dropping
+// (releasing the CF references) are thread-safe. The frame must not be
+// written to on the consuming thread.
 unsafe impl Send for BgraFrame {}
 
 /// The recombine pipeline: one device, one queue, one pipeline, one
@@ -153,12 +196,14 @@ impl Recombiner {
             None => (main_y.clone(), main_uv.clone()),
         };
         let has_aux = aux.is_some();
-        let dst = self.output_texture(w * zoom as usize, h * zoom as usize);
+        let (dst, surface, stride) = self.output_texture(w * zoom as usize, h * zoom as usize)?;
         let textures: [&TextureRef; 5] = [&main_y, &main_uv, &aux_y, &aux_uv, &dst];
         self.dispatch(&textures, w, h, has_aux, zoom)?;
         Ok(BgraFrame {
             texture: dst,
             cv,
+            surface,
+            stride,
             width,
             height,
             zoom,
@@ -183,12 +228,14 @@ impl Recombiner {
             ),
             None => (main_y.clone(), main_uv.clone()),
         };
-        let dst = self.output_texture(w * zoom as usize, h * zoom as usize);
+        let (dst, surface, stride) = self.output_texture(w * zoom as usize, h * zoom as usize)?;
         let textures: [&TextureRef; 5] = [&main_y, &main_uv, &aux_y, &aux_uv, &dst];
         self.dispatch(&textures, w, h, aux.is_some(), zoom)?;
         Ok(BgraFrame {
             texture: dst,
             cv: Vec::new(),
+            surface,
+            stride,
             width: w as u32,
             height: h as u32,
             zoom,
@@ -258,14 +305,38 @@ impl Recombiner {
         texture
     }
 
-    fn output_texture(&self, w: usize, h: usize) -> Texture {
+    /// An output texture whose pixels live in a fresh IOSurface, so GL
+    /// can sample the same storage zero-copy. The surface is retained
+    /// for the frame; the texture releases with it.
+    fn output_texture(&self, w: usize, h: usize) -> Result<(Texture, *mut c_void, usize)> {
         let desc = TextureDescriptor::new();
         desc.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
         desc.set_width(w as u64);
         desc.set_height(h as u64);
-        desc.set_usage(MTLTextureUsage::ShaderWrite);
-        desc.set_storage_mode(MTLStorageMode::Shared);
-        self.device.new_texture(&desc)
+        // ShaderWrite for the recombine; ShaderRead for tests and the
+        // CPU fallback, which read the pixels back through the texture.
+        desc.set_usage(MTLTextureUsage::ShaderWrite | MTLTextureUsage::ShaderRead);
+        // SAFETY: the surface is created for exactly this texture's
+        // geometry, and its retention transfers to the frame.
+        let (surface, stride) = unsafe { create_surface(w, h)? };
+        // SAFETY: the descriptor is freshly configured, the device is
+        // live, and the message signature matches the selector
+        // (`newTextureWithDescriptor:iosurface:plane:`, plane 0); the
+        // result is checked for null.
+        let texture = unsafe {
+            texture_from_iosurface(self.device.as_ptr().cast(), desc.as_ptr().cast(), surface)
+        };
+        if texture.is_null() {
+            // SAFETY: the surface was retained by `create_surface` and
+            // is released here on the failure path.
+            unsafe { CFRelease(surface.cast()) };
+            return Err(Error::Metal(
+                "newTextureWithDescriptor:iosurface: returned nil".into(),
+            ));
+        }
+        // SAFETY: the returned id is an MTLTexture the frame will own.
+        let texture = unsafe { Texture::from_ptr(texture.cast()) };
+        Ok((texture, surface, stride))
     }
 
     fn dispatch(
@@ -400,6 +471,133 @@ unsafe fn cache_texture(
     }
 }
 
+// --- IOSurface output allocation, shared with GL -----------------------
+
+#[link(name = "IOSurface", kind = "framework")]
+extern "C" {
+    #[link_name = "kIOSurfaceWidth"]
+    static K_IOSURFACE_WIDTH: *const c_void;
+    #[link_name = "kIOSurfaceHeight"]
+    static K_IOSURFACE_HEIGHT: *const c_void;
+    #[link_name = "kIOSurfaceBytesPerRow"]
+    static K_IOSURFACE_BYTES_PER_ROW: *const c_void;
+    #[link_name = "kIOSurfaceBytesPerElement"]
+    static K_IOSURFACE_BYTES_PER_ELEMENT: *const c_void;
+    #[link_name = "kIOSurfacePixelFormat"]
+    static K_IOSURFACE_PIXEL_FORMAT: *const c_void;
+    fn IOSurfaceCreate(properties: *const c_void) -> *mut c_void;
+}
+
+// CFDictionaryCreate/CFNumberCreate and the kCFType callback constants
+// are declared once, in vt.rs, and shared here.
+
+/// kCFNumberSInt64Type from CFNumber.h.
+const K_CF_NUMBER_S_INT_64: isize = 4;
+
+/// 'BGRA' as a fourcc, the IOSurface pixel format matching
+/// `MTLPixelFormatBGRA8Unorm` byte for byte.
+const BGRA_FOURCC: i64 = 0x4247_5241;
+
+/// A retained `w`x`h` BGRA IOSurface with 64-byte-aligned rows, plus
+/// its bytes-per-row (which may exceed `w * 4`).
+///
+/// # Safety
+///
+/// The caller must eventually `CFRelease` the returned surface.
+unsafe fn create_surface(w: usize, h: usize) -> Result<(*mut c_void, usize)> {
+    let stride = (w * 4).div_ceil(64) * 64;
+    // SAFETY: the number values are plain integers outliving the call;
+    // the empty allocator selects the default.
+    let number = |v: i64| unsafe {
+        CFNumberCreate(
+            std::ptr::null(),
+            K_CF_NUMBER_S_INT_64,
+            &v as *const i64 as *const c_void,
+        )
+    };
+    let w_n = number(w as i64);
+    let h_n = number(h as i64);
+    let stride_n = number(stride as i64);
+    let elem_n = number(4);
+    let format_n = number(BGRA_FOURCC);
+    // SAFETY: the kIOSurface* constants are immutable CFString
+    // pointers provided by the framework.
+    let keys: [*const c_void; 5] = [
+        unsafe { K_IOSURFACE_WIDTH },
+        unsafe { K_IOSURFACE_HEIGHT },
+        unsafe { K_IOSURFACE_BYTES_PER_ROW },
+        unsafe { K_IOSURFACE_BYTES_PER_ELEMENT },
+        unsafe { K_IOSURFACE_PIXEL_FORMAT },
+    ];
+    let values: [*const c_void; 5] = [
+        w_n.cast(),
+        h_n.cast(),
+        stride_n.cast(),
+        elem_n.cast(),
+        format_n.cast(),
+    ];
+    // SAFETY: keys and values point at `count` valid CF objects, and
+    // the type callbacks retain them into the dictionary.
+    let props = unsafe {
+        CFDictionaryCreate(
+            std::ptr::null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            keys.len() as isize,
+            &K_CF_TYPE_DICTIONARY_KEY_CALL_BACKS,
+            &K_CF_TYPE_DICTIONARY_VALUE_CALL_BACKS,
+        )
+    };
+    // SAFETY: `props` holds the numbers; they are released with it.
+    for n in values {
+        // SAFETY: each number was created above and is released
+        // exactly once here.
+        unsafe { CFRelease(n) };
+    }
+    // SAFETY: `props` is a valid property dictionary for a BGRA
+    // surface of the stated geometry.
+    let surface = unsafe { IOSurfaceCreate(props) };
+    // SAFETY: the dictionary was created above and is released here.
+    unsafe { CFRelease(props) };
+    if surface.is_null() {
+        return Err(Error::Metal("IOSurfaceCreate failed".into()));
+    }
+    Ok((surface, stride))
+}
+
+#[link(name = "objc", kind = "dylib")]
+extern "C" {
+    fn sel_registerName(name: *const std::ffi::c_char) -> *const c_void;
+    fn objc_msgSend(
+        receiver: *mut c_void,
+        selector: *const c_void,
+        descriptor: *mut c_void,
+        surface: *mut c_void,
+        plane: usize,
+    ) -> *mut c_void;
+}
+
+/// `[device newTextureWithDescriptor:iosurface:plane:0]`.
+///
+/// # Safety
+///
+/// `device` must be a live MTLDevice, `descriptor` a live
+/// MTLTextureDescriptor, and `surface` a BGRA IOSurface matching the
+/// descriptor's geometry.
+unsafe fn texture_from_iosurface(
+    device: *mut c_void,
+    descriptor: *mut c_void,
+    surface: *mut c_void,
+) -> *mut c_void {
+    // SAFETY: the argument and return types match the selector's
+    // signature exactly (id, SEL, id, IOSurfaceRef, NSUInteger -> id),
+    // which is the contract objc_msgSend is called under on arm64.
+    unsafe {
+        let selector = sel_registerName(c"newTextureWithDescriptor:iosurface:plane:".as_ptr());
+        objc_msgSend(device, selector, descriptor, surface, 0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,6 +679,22 @@ mod tests {
         let src = random_yuv444(64, 32, 13);
         let (main, aux) = chroma::split_yuv444(&src);
         check(&main, Some(&aux), 2);
+    }
+
+    #[test]
+    fn shader_matches_the_reference_padded_stride() {
+        // Width 66: 4 bytes per pixel is not a multiple of the
+        // surface's 64-byte rows, so readback must compact rows.
+        let src = random_yuv444(66, 32, 14);
+        let (main, aux) = chroma::split_yuv444(&src);
+        let r = Recombiner::new().expect("a Metal device");
+        let frame = r.recombine_planes(&main, Some(&aux), 1).expect("recombine");
+        assert!(frame.stride() > 66 * 4);
+        let want = display::to_bgra(&main, Some(&aux), 1);
+        let got = frame.to_bgra();
+        assert_eq!(got.len(), want.len());
+        let delta = max_delta(&got, &want);
+        assert!(delta <= 1, "padded-stride delta {delta}");
     }
 
     #[test]

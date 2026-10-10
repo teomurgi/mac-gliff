@@ -489,7 +489,7 @@ struct CMSampleTimingInfo {
 
 /// `CFDictionaryKeyCallBacks`: version plus five callback pointers.
 #[repr(C)]
-struct CFDictionaryKeyCallBacks {
+pub(crate) struct CFDictionaryKeyCallBacks {
     version: isize,
     retain: usize,
     release: usize,
@@ -500,7 +500,7 @@ struct CFDictionaryKeyCallBacks {
 
 /// `CFDictionaryValueCallBacks`: version plus four callback pointers.
 #[repr(C)]
-struct CFDictionaryValueCallBacks {
+pub(crate) struct CFDictionaryValueCallBacks {
     version: isize,
     retain: usize,
     release: usize,
@@ -528,11 +528,11 @@ extern "C" {
     #[link_name = "kCFBooleanFalse"]
     static K_CF_BOOLEAN_FALSE: *const c_void;
     #[link_name = "kCFTypeDictionaryKeyCallBacks"]
-    static K_CF_TYPE_DICTIONARY_KEY_CALL_BACKS: CFDictionaryKeyCallBacks;
+    pub(crate) static K_CF_TYPE_DICTIONARY_KEY_CALL_BACKS: CFDictionaryKeyCallBacks;
     #[link_name = "kCFTypeDictionaryValueCallBacks"]
-    static K_CF_TYPE_DICTIONARY_VALUE_CALL_BACKS: CFDictionaryValueCallBacks;
+    pub(crate) static K_CF_TYPE_DICTIONARY_VALUE_CALL_BACKS: CFDictionaryValueCallBacks;
     fn CFRelease(cf: *const c_void);
-    fn CFDictionaryCreate(
+    pub(crate) fn CFDictionaryCreate(
         allocator: CFAllocatorRef,
         keys: *const *const c_void,
         values: *const *const c_void,
@@ -540,7 +540,7 @@ extern "C" {
         key_callbacks: *const CFDictionaryKeyCallBacks,
         value_callbacks: *const CFDictionaryValueCallBacks,
     ) -> CFDictionaryRef;
-    fn CFNumberCreate(
+    pub(crate) fn CFNumberCreate(
         allocator: CFAllocatorRef,
         the_type: isize,
         value_ptr: *const c_void,
