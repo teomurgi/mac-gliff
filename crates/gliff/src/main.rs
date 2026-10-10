@@ -9,6 +9,8 @@ mod clipboard;
 mod clipboard_ui;
 #[cfg(target_os = "macos")]
 mod glvideo;
+#[cfg(target_os = "macos")]
+mod kbd;
 mod keymap;
 mod net;
 mod paintable;
@@ -1639,11 +1641,12 @@ fn install_input_handlers(
     video.set_focusable(true);
     video.set_can_focus(true);
 
-    // Keyboard: hardware keycode minus 8 is the evdev code. The controller
-    // runs in the capture phase so that while the picture has the keyboard
-    // every key goes to the remote, ahead of any local handling.
+    // Keyboard: the evdev code is the hardware keycode minus 8 on
+    // Linux, and the positional kVK table on macOS. The controller
+    // runs in the capture phase so that while the picture has the
+    // keyboard every key goes to the remote, ahead of any local
+    // handling.
     let key = gtk::EventControllerKey::new();
-    key.set_propagation_phase(gtk::PropagationPhase::Capture);
     let last_tap: Rc<RefCell<Option<Instant>>> = Rc::new(RefCell::new(None));
     {
         let ui = ui.clone();
@@ -1656,8 +1659,15 @@ fn install_input_handlers(
                 release_capture(&ui, &window);
                 return glib::Propagation::Stop;
             }
+            #[cfg(target_os = "linux")]
             let code = keycode.saturating_sub(8);
-            tracing::debug!(code, "key pressed");
+            // GDK on macOS reports kVK_* virtual keys, translated
+            // positionally to evdev codes.
+            #[cfg(target_os = "macos")]
+            let Some(code) = kbd::evdev_code(keycode as u16) else {
+                return glib::Propagation::Stop;
+            };
+            tracing::debug!(keycode, code, "key pressed");
             if track_key(&ui, code, true) {
                 send(
                     &ui,
@@ -1673,8 +1683,13 @@ fn install_input_handlers(
     {
         let ui = ui.clone();
         key.connect_key_released(move |_, _keyval, keycode, _state| {
+            #[cfg(target_os = "linux")]
             let code = keycode.saturating_sub(8);
-            tracing::debug!(code, "key released");
+            #[cfg(target_os = "macos")]
+            let Some(code) = kbd::evdev_code(keycode as u16) else {
+                return;
+            };
+            tracing::debug!(keycode, code, "key released");
             if track_key(&ui, code, false) {
                 send(
                     &ui,

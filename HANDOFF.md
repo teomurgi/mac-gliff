@@ -142,6 +142,19 @@ Decoding real gliff server output needs a Linux box running
   (`cargo run -p gliff --example glvideo`), which `#[path]`-includes
   the client's own `glvideo.rs`/`paintable.rs` (the client is a
   binary crate; examples cannot import from it otherwise).
+- **Input milestone facts**: GDK4 on macOS reports `kVK_*` virtual
+  keys as the hardware keycode (NSEvent.keyCode). `kbd.rs` translates
+  them positionally to evdev codes — the table is grounded in
+  HIToolbox Events.h straight from the SDK (two of the author's
+  from-memory codes were wrong; a duplicate-code unit test caught
+  them). The shipped keymap is pre-generated text from
+  `scripts/gen-keymaps.sh` (brew `libxkbcommon` + `xkeyboard-config`
+  at generation time only; nothing xkb runs on the Mac). The active
+  layout comes from `TISCopyCurrentKeyboardInputSource` +
+  `kTISPropertyInputSourceID` ("com.apple.keylayout.German" → `de`),
+  polled on the main thread every 2 s — TIS is another main-thread
+  API; the initial keymap is sent synchronously so a session's 1 s
+  first-keymap wait always catches it.
 
 **Repo/tooling facts**:
 
@@ -164,17 +177,15 @@ Decoding real gliff server output needs a Linux box running
 
 ## Remaining milestones (README has the checklist)
 
-1. **Input**: kVK→evdev table (main.rs sends `hardware_keycode - 8` as
-   evdev codes; GDK on macOS reports `kVK_*`) plus shipping an xkb
-   keymap compiled from the active input source (`keymap.rs` currently
-   sends none).
-2. **Packaging**: Homebrew formula, codesigning.
+1. **Packaging**: Homebrew formula, codesigning.
 
 Also known polish, not blockers: `--video gpu` help text still says
 "Vulkan compute + VA-API" (the string lives in `gliff-sw`'s clap
 docs); the recombine allocates a fresh IOSurface per frame (gliff-vk
-recycles a ring of three); the binary is otherwise unexercised against
-a real gliff server on macOS (needs the Linux box).
+recycles a ring of three); the kVK→evdev table and the input-source
+mapping are best-effort positional (typing works, exotic layouts fall
+back to `us`); the binary is otherwise unexercised against a real
+gliff server on macOS (needs the Linux box).
 
 ## Repo conventions
 

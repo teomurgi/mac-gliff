@@ -30,8 +30,13 @@ that still apply.
   it through the paintable's layout math, so pointer mapping and zoom
   are identical across tiers. The `glvideo` example verifies the
   framebuffer against the decoded pixels: delta 0.
-- [ ] **Input**: a kVK → evdev keycode table (both positional) plus
-  shipping an xkb keymap derived from the active macOS input source.
+- [x] **Input**: a positional kVK → evdev table (`kbd.rs`, grounded in
+  HIToolbox's Events.h) translates what GDK reports on macOS, and the
+  active keyboard layout (Text Input Sources) is mapped to its xkb
+  counterpart whose pre-generated keymap text (`scripts/gen-keymaps.sh`,
+  committed under `crates/gliff/keymaps/`) is shipped to the server —
+  no xkb machinery runs on the Mac. Layout changes are picked up
+  mid-session.
 - [ ] Packaging (Homebrew), codesigning.
 
 ## Layout
