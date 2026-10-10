@@ -286,7 +286,7 @@ impl Drop for Decoder {
                 CFRelease(self.format.cast());
             }
             dispatch_semaphore_signal(self.shared.sem.0);
-            dispatch_semaphore_release(self.shared.sem.0);
+            dispatch_release(self.shared.sem.0.cast());
         }
     }
 }
@@ -583,7 +583,7 @@ extern "C" {
     fn dispatch_semaphore_create(value: isize) -> DispatchSemaphore;
     fn dispatch_semaphore_wait(sema: DispatchSemaphore, timeout: u64) -> isize;
     fn dispatch_semaphore_signal(sema: DispatchSemaphore) -> isize;
-    fn dispatch_semaphore_release(sema: DispatchSemaphore);
+    fn dispatch_release(object: *const c_void);
 }
 
 #[cfg(test)]
