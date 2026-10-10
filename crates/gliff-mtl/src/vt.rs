@@ -224,7 +224,7 @@ impl Decoder {
             note("vt: sample ok\n");
             check(
                 "VTDecompressionSessionDecodeFrame",
-                VTDecompressionSessionDecodeFrame(self.session, sb, 0, null_mut()),
+                VTDecompressionSessionDecodeFrame(self.session, sb, 0, null_mut(), null_mut()),
             )?;
             note("vt: decode submitted\n");
             CFRelease(sb.cast());
@@ -632,6 +632,7 @@ extern "C" {
         sample_buffer: CMSampleBufferRef,
         decode_flags: u32,
         source_frame_ref_con: *mut c_void,
+        info_flags_out: *mut u32,
     ) -> i32;
     fn VTDecompressionSessionInvalidate(session: VTDecompressionSessionRef);
     fn VTDecompressionSessionWaitForAsynchronousFrames(session: VTDecompressionSessionRef) -> i32;

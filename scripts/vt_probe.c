@@ -149,10 +149,7 @@ int main(int argc, char **argv) {
                                    &sb);
     printf("probe: sample %d\n", (int)st);
     if (st) return 1;
-
-    printf("probe: decoding...\n");
-    fflush(stdout);
-    st = VTDecompressionSessionDecodeFrame(session, sb, 0, NULL);
+    st = VTDecompressionSessionDecodeFrame(session, sb, 0, NULL, NULL);
     printf("probe: decode %d\n", (int)st);
     dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
     printf("probe: done\n");
