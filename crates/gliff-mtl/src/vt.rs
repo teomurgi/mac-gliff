@@ -205,7 +205,6 @@ impl Decoder {
                 presentationTimeStamp: pts,
                 decodeTimeStamp: CMTime::INVALID,
             };
-            note("vt: block ok\n");
             let mut sb: CMSampleBufferRef = null_mut();
             check(
                 "CMSampleBufferCreateReady",
@@ -221,12 +220,10 @@ impl Decoder {
                     &mut sb,
                 ),
             )?;
-            note("vt: sample ok\n");
             check(
                 "VTDecompressionSessionDecodeFrame",
                 VTDecompressionSessionDecodeFrame(self.session, sb, 0, null_mut(), null_mut()),
             )?;
-            note("vt: decode submitted\n");
             CFRelease(sb.cast());
             CFRelease(block.cast());
         }
@@ -236,7 +233,6 @@ impl Decoder {
         unsafe {
             dispatch_semaphore_wait(self.shared.sem.0, DISPATCH_TIME_FOREVER);
         }
-        note("vt: waited\n");
         let buffer = self.shared.pending.lock().take().map(|b| b.0);
         Ok(buffer.map(|buffer| PixelFrame { buffer }))
     }
@@ -323,7 +319,6 @@ unsafe extern "C" fn on_output(
     _pts: CMTime,
     _duration: CMTime,
 ) {
-    note("vt: callback entered\n");
     // SAFETY: ctx is the Arc<Shared> pointer handed to session creation;
     // the callback runs while the session (and so the decoder) is alive.
     let shared = unsafe { &*(ctx as *const Shared) };
@@ -332,21 +327,11 @@ unsafe extern "C" fn on_output(
         // transfers ownership to the pending slot.
         unsafe { CVPixelBufferRetain(image) };
         *shared.pending.lock() = Some(Owned(image));
-        note("vt: callback stored\n");
     } else if status != 0 {
         tracing::warn!(code = status, "videotoolbox decode status");
     }
     // SAFETY: signalling a live semaphore.
     unsafe { dispatch_semaphore_signal(shared.sem.0) };
-}
-
-/// Progress marker that bypasses the test harness's output capture, so
-/// the last completed step is visible even when the process dies hard.
-fn note(s: &str) {
-    use std::io::Write;
-    if let Ok(mut f) = std::fs::File::create("/dev/stderr") {
-        let _ = f.write_all(s.as_bytes());
-    }
 }
 
 fn check(call: &'static str, code: i32) -> Result<()> {

@@ -11,18 +11,13 @@ are kept in place so the port can be wired into the client with the
 smallest possible diff. See `docs/` for the upstream architecture notes
 that still apply.
 
-## Status
-
-- [x] **Portable core, tested everywhere**: `gliff-mtl::avcc` (Annex B →
-  AVCC framing, parameter-set extraction) and `gliff-mtl::display` (the
-  CPU recombine reference), both checked against the `gliff-proto`
-  oracle.
 - [x] **macOS decode + compute**: `gliff-mtl::vt` (VideoToolbox session
-  per stream, raw C FFI) and `gliff-mtl::compute` (Metal compute
-  pipeline, `CVMetalTextureCache` zero-copy input, fast math off).
-  Built and exercised on the macOS CI runner, which decodes the
+  per stream, raw C FFI, hardware by default with a
+  `new_software()` escape for virtual machines) and
+  `gliff-mtl::compute` (Metal compute pipeline, `CVMetalTextureCache`
+  zero-copy input, fast math off). The macOS CI runner decodes the
   recorded H.264 fixture through VideoToolbox, recombines it through
-  the shader, and compares against the reference.
+  the shader, and matches the CPU reference — the full pipeline, green.
 - [ ] **Wire into the client** (`crates/gliff`): a `VideoDecoder::Metal`
   arm behind `cfg(target_os = "macos")`, cfg-gating `gliff-vk` /
   `hypr-capture` / `hypr-input` off darwin, and a `Frame` variant for
