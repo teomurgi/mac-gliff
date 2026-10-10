@@ -577,7 +577,8 @@ extern "C" {
     fn VTDecompressionSessionWaitForAsynchronousFrames(session: VTDecompressionSessionRef) -> i32;
 }
 
-#[link(name = "Dispatch", kind = "framework")]
+// The dispatch semaphore functions live in libSystem, which is linked
+// by default; there is no standalone Dispatch framework to link.
 extern "C" {
     fn dispatch_semaphore_create(value: isize) -> DispatchSemaphore;
     fn dispatch_semaphore_wait(sema: DispatchSemaphore, timeout: u64) -> isize;
