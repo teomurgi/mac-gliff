@@ -161,8 +161,8 @@ impl Decoder {
         }
         *self.shared.pending.lock() = None;
 
-        // SAFETY: `sample` outlives the block buffer, which is released
-        // before the function returns; all handles are checked.
+        // SAFETY: the block buffer copies the sample (AlwaysCopyData), so
+        // nothing outlives anything; all handles are checked.
         unsafe {
             let mut block: CMBlockBufferRef = null_mut();
             check(
@@ -173,7 +173,7 @@ impl Decoder {
                     sample.len(),
                     K_CF_ALLOCATOR_NULL,
                     null(),
-                    0,
+                    CM_BLOCK_BUFFER_ALWAYS_COPY_DATA,
                     null_mut(),
                     &mut block,
                 ),
@@ -416,6 +416,9 @@ const CV_PIXEL_FORMAT_420V: u32 = 0x3432_3076;
 
 /// `kCFNumberSInt32Type`.
 const CF_NUMBER_SINT32: isize = 3;
+
+/// `kCMBlockBufferAlwaysCopyDataFlag`.
+const CM_BLOCK_BUFFER_ALWAYS_COPY_DATA: u32 = 1 << 1;
 
 /// `DISPATCH_TIME_FOREVER`.
 const DISPATCH_TIME_FOREVER: u64 = u64::MAX;

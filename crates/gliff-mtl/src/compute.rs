@@ -231,6 +231,11 @@ impl Recombiner {
         });
         desc.set_width(w as u64);
         desc.set_height(h as u64);
+        // Shared storage: the CPU upload is immediately GPU-visible.
+        // (The default, Managed, is not guaranteed to be without a blit
+        // synchronize; Shared needs unified memory, which every machine
+        // this port targets has.)
+        desc.set_storage_mode(MTLStorageMode::Shared);
         desc.set_usage(MTLTextureUsage::ShaderRead);
         let texture = self.device.new_texture(&desc);
         assert_eq!(bytes.len(), w * h * bytes_per_pixel);
