@@ -107,7 +107,7 @@ pub fn split_yuv444(src: &Yuv444) -> (I420, I420) {
 
     // Even rows: the even columns go to main, the odd columns to aux.
     let deinterleave = |line: &[u8], even: &mut [u8], odd: &mut [u8]| {
-        for ((pair, e), o) in line.chunks_exact(2).zip(even).zip(odd) {
+        for ((pair, e), o) in line.as_chunks::<2>().0.iter().zip(even).zip(odd) {
             *e = pair[0];
             *o = pair[1];
         }
@@ -239,7 +239,7 @@ mod scalar {
     use super::*;
 
     pub fn row_y(bgra: &[u8], y: &mut [u8]) {
-        for (px, y) in bgra.chunks_exact(4).zip(y) {
+        for (px, y) in bgra.as_chunks::<4>().0.iter().zip(y) {
             let (b, g, r) = (px[0] as i32, px[1] as i32, px[2] as i32);
             *y = clamp((KYR as i32 * r + KYG as i32 * g + KYB as i32 * b + Y_BIAS) >> FRAC);
         }
@@ -255,7 +255,7 @@ mod scalar {
     }
 
     pub fn row_bgra(y: &[u8], u: &[u8], v: &[u8], out: &mut [u8], upsample: bool) {
-        for (i, (px, y)) in out.chunks_exact_mut(4).zip(y).enumerate() {
+        for (i, (px, y)) in out.as_chunks_mut::<4>().0.iter_mut().zip(y).enumerate() {
             let c = if upsample { i / 2 } else { i };
             let yy = *y as i32 - 16;
             let cb = u[c] as i32 - 128;
@@ -505,7 +505,7 @@ mod tests {
     fn i420_from(nv12: &gliff_proto::chroma::Nv12) -> I420 {
         let mut out = I420::new(nv12.width, nv12.height);
         out.y.copy_from_slice(&nv12.y);
-        for (i, pair) in nv12.uv.chunks_exact(2).enumerate() {
+        for (i, pair) in nv12.uv.as_chunks::<2>().0.iter().enumerate() {
             out.u[i] = pair[0];
             out.v[i] = pair[1];
         }

@@ -78,6 +78,14 @@ impl Drop for BgraFrame {
     }
 }
 
+// SAFETY: a frame crosses from the decode worker to the UI thread only
+// after `dispatch` waited for the command buffer that wrote it, so its
+// texture is complete and thereafter read-only; reading pixels
+// (`getBytes`) and dropping (releasing the IOSurface-backed
+// CVMetalTexture references and the texture) are thread-safe. The frame
+// must not be written to on the consuming thread.
+unsafe impl Send for BgraFrame {}
+
 /// The recombine pipeline: one device, one queue, one pipeline, one
 /// texture cache. Not `Send`; keep it on the decode worker's thread.
 pub struct Recombiner {

@@ -183,8 +183,11 @@ impl BgraFrame {
                 .zip(self.pixels.par_chunks_exact(src_stride))
                 .for_each(|(block, src_row)| {
                     let (first, rest) = block.split_at_mut(dst_stride);
-                    for (dst, px) in first.chunks_exact_mut(4 * z).zip(src_row.chunks_exact(4)) {
-                        for out in dst.chunks_exact_mut(4) {
+                    for (dst, px) in first
+                        .chunks_exact_mut(4 * z)
+                        .zip(src_row.as_chunks::<4>().0)
+                    {
+                        for out in dst.as_chunks_mut::<4>().0 {
                             out.copy_from_slice(px);
                         }
                     }
@@ -624,7 +627,7 @@ mod tests {
     fn detailed_bgra(w: usize, h: usize) -> Vec<u8> {
         let mut seed = 0x2545_f491_u32;
         let mut out = vec![0u8; w * h * 4];
-        for px in out.chunks_exact_mut(4) {
+        for px in out.as_chunks_mut::<4>().0 {
             seed ^= seed << 13;
             seed ^= seed >> 17;
             seed ^= seed << 5;
@@ -635,7 +638,9 @@ mod tests {
     }
 
     fn rgb_channels(bgra: &[u8]) -> Vec<u8> {
-        bgra.chunks_exact(4)
+        bgra.as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[1], p[2]])
             .collect()
     }

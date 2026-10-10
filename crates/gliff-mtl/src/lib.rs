@@ -24,6 +24,8 @@ pub mod avcc;
 pub mod display;
 
 #[cfg(target_os = "macos")]
+pub mod client;
+#[cfg(target_os = "macos")]
 pub mod compute;
 #[cfg(target_os = "macos")]
 pub mod vt;

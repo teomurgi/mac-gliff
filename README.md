@@ -18,10 +18,12 @@ that still apply.
   zero-copy input, fast math off). The macOS CI runner decodes the
   recorded H.264 fixture through VideoToolbox, recombines it through
   the shader, and matches the CPU reference — the full pipeline, green.
-- [ ] **Wire into the client** (`crates/gliff`): a `VideoDecoder::Metal`
-  arm behind `cfg(target_os = "macos")`, cfg-gating `gliff-vk` /
-  `hypr-capture` / `hypr-input` off darwin, and a `Frame` variant for
-  the Metal output.
+- [x] **Wire into the client** (`crates/gliff`): a `VideoDecoder::Metal`
+  arm behind `cfg(target_os = "macos")`, `gliff-vk` / `hypr-capture` /
+  `hypr-input` (and the unused `hypr-ipc`, `drm-fourcc`) gated to Linux,
+  and a `Frame::Metal` variant the UI wraps as a GDK texture. The
+  client builds and runs on macOS; decode is VT+Metal end to end, with
+  a CPU-tier readback into GTK for now.
 - [ ] **Display**: the video widget on macOS — GTK4 has no IOSurface
   path; the plan is `gtk::GLArea` + `CVOpenGLTextureCache` sharing the
   same IOSurface Metal writes.
@@ -34,7 +36,7 @@ that still apply.
 ```
 crates/gliff-mtl       the port: avcc + display (portable), vt + compute (macOS)
 shaders/recombine.metal  the MSL transliteration of gliff-vk's recombine.comp
-crates/...             vendored gliff, unmodified so far
+crates/gliff           the vendored client, wired to the tiers per OS
 docs/                  upstream architecture and quirks notes
 ```
 
@@ -44,7 +46,11 @@ docs/                  upstream architecture and quirks notes
 cargo test -p gliff-mtl          # portable core, any platform
 cargo test -p gliff-mtl          # on macOS: also VideoToolbox + Metal,
                                  # including the shader-vs-reference check
-cargo clippy -p gliff-mtl --all-targets -- -D warnings
+cargo test -p gliff-mtl -- --ignored   # on a real Mac: the hardware-VT pipeline
+cargo clippy -p gliff-mtl -p gliff --all-targets -- -D warnings
 ```
 
-CI runs both on ubuntu (portable tests) and macos-15 (the full tier).
+CI runs both on ubuntu (portable tests plus the client against GTK) and
+macos-15 (the full tier plus the client). The client needs the GTK4
+development libraries (`brew install pkg-config gtk4 libadwaita` on
+macOS) and Rust ≥ 1.92, the floor of the locked gtk4-rs stack.

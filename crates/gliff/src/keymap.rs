@@ -16,12 +16,17 @@ pub const FIRST_KEYMAP_WAIT: Duration = Duration::from_secs(1);
 
 pub fn watch() -> Keymap {
     let (tx, rx) = watch::channel(String::new());
-    let sink = Box::new(move |text: String| {
-        tracing::debug!(bytes = text.len(), "local keymap changed");
-        tx.send_replace(text);
-    });
-    if let Err(e) = hypr_input::watch_keymap(hypr_input::Target::default(), sink) {
-        tracing::warn!(error = %e, "cannot follow the local keymap; server will default to us");
+    #[cfg(target_os = "linux")]
+    {
+        let sink = Box::new(move |text: String| {
+            tracing::debug!(bytes = text.len(), "local keymap changed");
+            tx.send_replace(text);
+        });
+        if let Err(e) = hypr_input::watch_keymap(hypr_input::Target::default(), sink) {
+            tracing::warn!(error = %e, "cannot follow the local keymap; server will default to us");
+        }
     }
+    #[cfg(target_os = "macos")]
+    drop(tx); // nothing to watch yet; the milestone for input ships one
     rx
 }

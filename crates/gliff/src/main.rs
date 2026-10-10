@@ -1,9 +1,9 @@
 //! gliff: a GTK4/libadwaita window that connects to a gliff server,
 //! decodes the video, shows it, and forwards keyboard and pointer input.
 //!
-//! Decode runs on a worker thread (see `net`); this file is the UI. Decoded
-//! frames arrive as dmabufs, which GTK imports as textures, so the UI has no
-//! GPU code of its own; its one `unsafe` block hands GTK a dmabuf fd.
+//! Decode runs on a worker thread (see `net`); this file is the UI.
+//! Decoded frames arrive as GPU-tier images (a dmabuf GTK imports on
+//! Linux; a Metal texture read back on macOS) or plain BGRA pixels.
 
 mod clipboard;
 mod clipboard_ui;
@@ -15,6 +15,7 @@ mod theme;
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
+#[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -25,6 +26,7 @@ use adw::prelude::*;
 use clap::Parser;
 use gliff_proto::{Axis, ClientMsg};
 use gliff_transport::SshTarget;
+#[cfg(target_os = "linux")]
 use gliff_vk::DisplayFrame;
 use gtk::gdk;
 use gtk::glib;
@@ -1069,11 +1071,29 @@ fn poll_frames(ui: Rc<App>, s: Rc<Session>, rx: Receiver<Picture>, generation: u
     });
 }
 
-/// Wrap a decoded frame as a GDK texture: a dmabuf import for the GPU tier,
-/// a plain memory texture for the CPU tier.
+/// Wrap a decoded frame as a GDK texture: the GPU tier's dmabuf import
+/// (Linux) or Metal readback (macOS), a plain memory texture for the
+/// CPU tier.
 fn frame_texture(f: Frame) -> Result<gdk::Texture, glib::Error> {
     match f {
+        #[cfg(target_os = "linux")]
         Frame::Dmabuf(f) => dmabuf_texture(f),
+        #[cfg(target_os = "macos")]
+        Frame::Metal(f) => {
+            let (w, h) = (
+                f.width as usize * f.zoom as usize,
+                f.height as usize * f.zoom as usize,
+            );
+            let bytes = glib::Bytes::from_owned(f.to_bgra());
+            Ok(gdk::MemoryTexture::new(
+                w as i32,
+                h as i32,
+                gdk::MemoryFormat::B8g8r8x8,
+                &bytes,
+                w * 4,
+            )
+            .upcast())
+        }
         Frame::Bgra(f) => {
             let bytes = glib::Bytes::from_owned(f.pixels);
             Ok(gdk::MemoryTexture::new(
@@ -1088,6 +1108,7 @@ fn frame_texture(f: Frame) -> Result<gdk::Texture, glib::Error> {
     }
 }
 
+#[cfg(target_os = "linux")]
 /// Wrap a decoded frame's dmabuf as a GDK texture. The frame (and its fd)
 /// lives until GTK releases the texture, which returns the image to the
 /// decoder's ring.
@@ -1286,12 +1307,12 @@ fn remote_cursor(image: CursorImage) -> Option<gdk::Cursor> {
 }
 
 fn has_visible_shape(argb: &[u8]) -> bool {
-    let mut pixels = argb.chunks_exact(4);
-    let Some(first) = pixels.next() else {
+    let (pixels, _) = argb.as_chunks::<4>();
+    let Some(first) = pixels.first() else {
         return false;
     };
-    let opaque = first[3] != 0 || pixels.clone().any(|p| p[3] != 0);
-    let uniform = pixels.all(|p| p == first);
+    let opaque = pixels.iter().any(|p| p[3] != 0);
+    let uniform = pixels.iter().all(|p| p == first);
     opaque && !uniform
 }
 

@@ -1,9 +1,8 @@
 # mac-gliff handoff
 
-State of the port as of 2026-10-10, written for a fresh session resuming
-on a real Mac. Everything here is verified unless marked `[INFERENCE]`.
-Repo: `teomurgi/mac-gliff` (private). CI green:
-ubuntu (portable tests + `gliff-proto`) and macos-15 (full tier).
+State of the port as of 2026-10-10 (late evening), written for the next
+session resuming on a real Mac. Everything here is verified unless
+marked `[INFERENCE]`. Repo: `teomurgi/mac-gliff` (private).
 
 ## What this project is
 
@@ -19,42 +18,66 @@ Upstream `omacom/gliff @ a2edd50` is vendored byte-identical in commit
 port. `docs/` holds upstream architecture notes that still apply —
 read `docs/architecture.md` first if you touch the client.
 
-## Current state (milestone 1 complete)
+## Current state (milestones 1 and 2 complete)
 
-`crates/gliff-mtl` — the macOS GPU tier, standalone, not yet wired into
-the client:
+**Milestone 1** — `crates/gliff-mtl`, the standalone macOS GPU tier:
 
 | Module | What | Verified by |
 |---|---|---|
-| `avcc` | Annex B NAL split (from `gliff-va`), SPS/PPS extraction, AVCC framing, `access_units()` fixture helper | unit tests on both OSes |
+| `avcc` | Annex B NAL split, SPS/PPS extraction, AVCC framing, `access_units()` fixture helper | unit tests on both OSes |
 | `display` | CPU recombine reference (dual420/single420, zoom) | matches `gliff-proto::color` oracle, ≤1 LSB |
-| `vt` | VideoToolbox decoder session, raw C FFI, hardware default + `new_software()` for VMs | decodes the x264 fixture on the macOS runner (IDR + P, 64×64 NV12) |
-| `compute` | Metal compute recombine, `CVMetalTextureCache` zero-copy input, shader-from-source with fast math off | shader output matches `display` ≤1 LSB on the runner, incl. VT→Metal full-pipeline test |
-| `shaders/recombine.metal` | MSL transliteration of `gliff-vk`'s `recombine.comp` | same oracle chain |
+| `vt` | VideoToolbox decoder session, raw C FFI, hardware default + `new_software()` for VMs | decodes the x264 fixture (IDR + P, 64×64 NV12) |
+| `compute` | Metal compute recombine, `CVMetalTextureCache` zero-copy input, shader-from-source, fast math off | shader output matches `display` ≤1 LSB, incl. VT→Metal full-pipeline test |
+| `client` | the client-facing facade: `Gpu::open()` + `Decoder` mirroring `gliff-vk`'s decoder surface (decode/redraw/set_zoom/zoom), VM detection via `sysctlbyname("hw.model")` picking software VT | 6 tests incl. dual-pair, zoom+redraw, parameter-sets-only; the `#[ignore]`d hardware test passes on a real Mac |
 
-The pixel contract's chain of custody: `gliff-proto` (oracle) →
-`display.rs` (reference) → MSL shader — mirroring `gliff-probe
-pipeline` on Linux.
+`compute::BgraFrame` is `unsafe impl Send` (documented contract: the
+writing command buffer has completed; only read/drop it cross-thread) —
+frames cross worker→GTK via the picture channel.
+
+**Milestone 2** — the client (`crates/gliff`) is wired and runs on macOS:
+
+- `net.rs`: `VideoDecoder::Metal` arm (`cfg(target_os = "macos")`),
+  per-OS `open_gpu`/`new_decoder` (Metal falls back to the CPU tier),
+  `Frame::Metal(gliff_mtl::compute::BgraFrame)` variant, cfg'd decode /
+  zoom-redraw / drain arms, `Frame::is_gpu()` +
+  `VideoDecoder::returns_just_fed()` replacing the old `matches!`s.
+  The Linux arms are textual copies of the originals under cfg.
+- `main.rs`: `frame_texture` wraps the Metal frame via `to_bgra()`
+  readback into `gdk::MemoryTexture` (one copy; zero-copy display is
+  the next milestone); `dmabuf_texture` and the `gliff_vk` import are
+  Linux-only.
+- `keymap.rs`: the `hypr_input` watcher is Linux-only; macOS ships an
+  empty keymap (server defaults) until the input milestone.
+- `gliff/Cargo.toml`: `gliff-vk`/`hypr-capture`/`hypr-input` under
+  `[target.'cfg(target_os = "linux")'.dependencies]`, `gliff-mtl` under
+  macOS; dropped unused `hypr-ipc` and `drm-fourcc`.
+- `gliff-sw`: 8 mechanical `chunks_exact` → `as_chunks` conversions —
+  clippy 1.99's `chunks_exact_to_as_chunks` fires on `-D warnings`.
+  Same for `has_visible_shape` in `main.rs`.
+- Verified on this real Mac: `cargo test -p gliff-mtl` (19 + 1
+  ignored), `-- --ignored` (hardware VT pipeline, ≤1 LSB vs reference),
+  `cargo clippy -p gliff -p gliff-sw -p gliff-mtl --all-targets
+  -- -D warnings`, `cargo fmt`, and `gliff --help` from a debug build.
+
+**Hardware VideoToolbox decode is confirmed on real hardware** — the
+open question from the previous handoff is closed.
 
 ## Set up on a real Mac
 
 ```sh
 git clone https://github.com/teomurgi/mac-gliff && cd mac-gliff
-cargo test -p gliff-mtl          # 14 tests; VT + Metal run for real
-cargo clippy -p gliff-mtl --all-targets -- -D warnings
+brew install pkg-config gtk4 libadwaita
+mise install rust@latest            # gtk4-rs 0.11.4 needs rustc ≥ 1.92;
+mise x rust@latest -- cargo test -p gliff-mtl -p gliff   # the local 1.90 pin is too old
+mise x rust@latest -- cargo clippy -p gliff-mtl -p gliff --all-targets -- -D warnings
 ```
-
-No system deps beyond Xcode CLT (`xcode-select --install`); GTK is only
-needed once the client wiring milestone starts (`brew install gtk4
-libadwaita pkg-config`).
 
 The test fixture is a real x264 stream (High profile, CABAC, VUI) at
 `crates/gliff-va/src/h264/testdata/x264-64x64.264`. Gliff's own server
 streams differ in one way that matters: **no VUI** (writer asserts
 `!vui_present`), High profile, one-in/one-out (no B slices, POC type 0).
 Decoding real gliff server output needs a Linux box running
-`gliff-server --listen` (dev mode, no auth) — see
-`docs/development.md` upstream.
+`gliff-server --listen` (dev mode, no auth) — see `docs/development.md`.
 
 ## Hard-won facts (do not relearn these)
 
@@ -83,59 +106,72 @@ Decoding real gliff server output needs a Linux box running
 - `dispatch_threads` (non-uniform) misexecutes on paravirtualized GPUs;
   `dispatch_thread_groups` is what we use.
 - Upload textures need `MTLStorageMode::Shared` (default Managed isn't
-  guaranteed GPU-visible without a blit sync; fine on unified memory).
-- The GitHub macos-15 runner ("Apple Paravirtual device") runs the
-  shader tests fine, but **hardware VideoToolbox decode is absent
-  there**; tests use `Decoder::new_software()`. On a real Mac the
-  default (`Decoder::new()`) takes the hardware path — worth confirming
-  `videotoolbox_pipeline_matches_the_reference` still passes there.
+  GPU-visible without a blit sync; fine on unified memory).
 - metal-rs 0.33: `Texture::from_ptr` needs `use foreign_types::ForeignType`;
   `get_bytes(bytes, stride, region, level)`; `set_texture(index, Option<&TextureRef>)`;
-  `new_compute_pipeline_state_with_function`.
+  `new_compute_pipeline_state_with_function`. It has **no**
+  `max_texture_width/height` getters — zoom is clamped against 16384,
+  the macOS Metal minimum. metal types are `!Send` (hence the explicit
+  impl on `BgraFrame`).
+- `sysctlbyname` needs **no** `#[link]` attribute (rustc links
+  libSystem); an explicit `#[link(name = "libSystem", kind = "dylib")]`
+  fails to find the library on current SDKs.
+- VM detection for the VT hardware/software choice: `sysctl hw.model` —
+  real Macs answer `Mac*`/`iMac*` (this machine: `Mac17,6`), Apple VMs
+  `VirtualMac*`, others `VMware*`/`Parallels*`/`qemu*`. `kern.hv_support`
+  only says the Hypervisor framework exists — useless for this.
+- The GitHub macos-15 runner ("Apple Paravirtual device") runs the
+  shader tests fine, but **hardware VideoToolbox decode crashes there**;
+  tests use software VT. `gliff-mtl::client` auto-detects and the
+  `#[ignore]`d hardware test is the real-Mac check.
 - Error codes: CMBlockBuffer `-12704` = BadLengthParameter (missing
-  offset/dataLength args), `-12705` = BadPointerParameter (our extra
-  null landing in `blockBufferOut`).
+  offset/dataLength args), `-12705` = BadPointerParameter.
 
-**Client seams for the wiring milestone** (all in vendored `crates/gliff`):
+**Repo/tooling facts**:
 
-- `src/net.rs:188` `enum VideoDecoder { Gpu, Cpu }` — add a `Metal` arm
-  here; `open_gpu` (net.rs:196) is the graceful-fallback pattern to copy.
-- `src/net.rs:112` `enum Frame { Dmabuf, Bgra }` — add a Surface/Texture
-  variant; `Frame::Dmabuf` geometry tracking (`last_gpu_geometry`) shows
-  the redraw/zoom contract.
-- `src/main.rs:1074` `frame_texture` / `dmabuf_texture` — the display
-  handoff; this is where the GLArea+`CVOpenGLTextureCache` IOSurface
-  path slots in (GTK4 has no IOSurface API; that plan is in README).
-- `src/main.rs:1536-1570` — keyboard sends `hardware_keycode - 8` as
-  evdev codes. On macOS GDK reports `kVK_*` codes: needs a positional
-  kVK→evdev table. `src/keymap.rs` ships an xkb keymap from the local
-  Wayland seat — on macOS, compile one with libxkbcommon
-  (`xkb_keymap_new_from_names`) from the active input source instead.
-- `Decoder::decode` contract in `gliff-mtl::vt` already matches what
-  `net.rs` expects of the GPU decoder: one picture out per submitted
-  AU, synchronous wait inside.
+- A stale duplicate of the crate used to live at `gliff-mtl/` (repo
+  root) next to the real `crates/gliff-mtl` — committed by the very
+  first port commit and never cleaned up; it was missing every later
+  fix and confused the edit tooling into patching the wrong file.
+  Removed in the wiring commit. If files ever seem to "lose" edits,
+  check for same-basename duplicates first.
+- Workspace `rust-version` is 1.92 (the gtk4-rs 0.11.4 stack's floor).
+  The local mise default was 1.90 — too old; use
+  `mise x rust@latest -- cargo …`.
+- CI (`.github/workflows/ci.yml`) now builds `-p gliff` on both OSes:
+  brew GTK on macos, apt `libgtk-4-dev libadwaita-1-dev libva-dev
+  libgbm-dev libdrm-dev libxkbcommon-dev libvulkan-dev nasm` on ubuntu.
+  The ubuntu list mirrors `pkgbuild/PKGBUILD` depends [INFERENCE: the
+  apt closure was not verified on a runner yet; first push may need to
+  extend it].
+- Workspace lints require SAFETY comments on unsafe blocks — kept up.
 
 ## Remaining milestones (README has the checklist)
 
-1. **Wire in**: `VideoDecoder::Metal` arm behind
-   `cfg(target_os = "macos")`; cfg-gate `gliff-vk`/`gliff-va`/
-   `hypr-capture`/`hypr-input` deps out of the `gliff` crate on darwin
-   (they link libgbm/libva — the macOS build fails at link otherwise).
-   The `gliff` crate's `hypr-ipc` dep is likely dead weight (unused in
-   client sources).
-2. **Display**: GLArea + `CVOpenGLTextureCache` sharing the IOSurface
-   Metal writes (zero-copy). Risk item; spike it first.
-3. **Input**: kVK→evdev table + keymap shipping.
-4. **Packaging**: Homebrew formula, codesigning.
+1. **Display zero-copy**: `gtk::GLArea` + `CVOpenGLTextureCache`
+   sharing the IOSurface Metal writes. Needs IOSurface-backed output
+   textures in `compute` (`device.new_texture_with_descriptor` +
+   IOSurface, not the current plain textures), then `main.rs`'s
+   `frame_texture` Metal arm swaps readback for the GLArea path.
+   Risk item; spike first.
+2. **Input**: kVK→evdev table (main.rs sends `hardware_keycode - 8` as
+   evdev codes; GDK on macOS reports `kVK_*`) plus shipping an xkb
+   keymap compiled from the active input source (`keymap.rs` currently
+   sends none).
+3. **Packaging**: Homebrew formula, codesigning.
 
-CI: `.github/workflows/ci.yml` (matrix ubuntu/macos-15, fmt+clippy+test
-with `-D warnings`). The workspace lints require SAFETY comments on
-unsafe blocks — keep that up.
+Also known polish, not blockers: `--video gpu` help text still says
+"Vulkan compute + VA-API" (the string lives in `gliff-sw`'s clap docs);
+Metal recombine allocates a fresh output texture per frame (gliff-vk
+recycles a ring of three); `gliff --help` wording aside, the binary is
+otherwise unexercised against a real server on macOS.
 
 ## Repo conventions
 
-- Rust via rustup on the Mac (CI uses dtolnay/rust-toolchain@stable).
+- Rust via mise (`mise x rust@latest -- cargo …` on this machine; CI
+  uses dtolnay/rust-toolchain@stable).
 - Two-commit history base: vendor commit is pristine; keep port commits
-  on top so upstream rebases stay mechanical.
+  on top so upstream rebases stay mechanical. Vendored crates may take
+  port commits (gliff, gliff-sw already have) — keep them mechanical.
 - macOS-only deps go under `[target.'cfg(target_os = "macos")'.dependencies]`
-  in `crates/gliff-mtl/Cargo.toml` (metal, foreign-types, parking_lot).
+  (see `crates/gliff-mtl/Cargo.toml`, `crates/gliff/Cargo.toml`).
