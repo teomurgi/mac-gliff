@@ -176,7 +176,6 @@ impl Decoder {
                     0,
                     sample.len(),
                     0,
-                    null_mut(),
                     &mut block,
                 ),
             )?;
@@ -545,7 +544,6 @@ extern "C" {
         offset_to_data: usize,
         data_length: usize,
         flags: u32,
-        source_buffer: CMBlockBufferRef,
         block_buffer_out: *mut CMBlockBufferRef,
     ) -> i32;
     fn CMSampleBufferCreateReady(
