@@ -4,10 +4,10 @@
  *   clang -O1 -Wall -o vt_probe vt_probe.c -framework CoreFoundation \
  *       -framework CoreMedia -framework CoreVideo -framework VideoToolbox
  */
-#include <CMBlockBuffer.h>
-#include <CMSampleBuffer.h>
-#include <CMVideoFormatDescription.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <CoreMedia/CoreMedia.h>
+#include <CoreVideo/CoreVideo.h>
+#include <VideoToolbox/VideoToolbox.h>
 #include <dispatch/dispatch.h>
 #include <stdint.h>
 #include <stdio.h>
