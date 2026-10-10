@@ -33,12 +33,17 @@ jobs:
         if: matrix.os != 'macos-15'
         run: cargo test ${{ matrix.args }}
       # VideoToolbox crashes inside VTDecompressionSessionDecodeFrame on the
-      # paravirtualized runner; run under lldb so the backtrace names the
-      # faulting frame.
+      # paravirtualized runner. The C probe runs FFmpeg's exact flow over
+      # the same fixture to tell a broken runner VT from an FFI bug; lldb
+      # then names the faulting frame of the Rust tests.
       - name: Test (lldb)
         if: matrix.os == 'macos-15'
         run: |
           set -x
+          clang -O1 -Wall -o /tmp/vt_probe scripts/vt_probe.c \
+            -framework CoreFoundation -framework CoreMedia \
+            -framework CoreVideo -framework VideoToolbox
+          /tmp/vt_probe crates/gliff-va/src/h264/testdata/x264-64x64.264 || true
           cargo build -p gliff-mtl --tests
           BIN=""
           for f in target/debug/deps/gliff_mtl-*; do
