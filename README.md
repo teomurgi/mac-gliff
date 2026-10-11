@@ -115,6 +115,19 @@ While the pointer is over the picture, keys and window-manager shortcuts go to t
 machine; `Shift+Esc` hands them back (`--release-hotkey` changes or disables that). Copy
 on one machine, paste on the other.
 
+The Mac's own shortcuts work while the keyboard is local — ⌘Q quits, ⌘W closes the
+shown tab, ⌘T/⌘N open the address bar for a new connection. Captured, those chords go
+to the remote machine like any other: release first (`Shift+Esc`) to use them locally.
+
+A few chords macOS never hands to any app — Spotlight's ⌘Space, the ⌘Tab app
+switcher, Mission Control — so they reach the Mac only, captured or not. GTK's
+macOS backend drops ⌥Space too (the non-breaking space it types never becomes a
+key event). The launcher is bridged around all that: while captured, ⌃Space is
+translated to the remote's `super+space` (`--launcher-hotkey` changes the local
+chord, `none` disables it). Or free ⌘Space itself — System Settings → Keyboard →
+Keyboard Shortcuts → Spotlight, off or remap "Show Spotlight search" — and it
+arrives like any other key.
+
 ## Status
 
 Ported and tested: decode + recombine (VideoToolbox + Metal, output checked against the
@@ -127,7 +140,9 @@ verified from the mounted image, GTK stack and all.
 - [ ] Homebrew packaging
 - [ ] Developer ID codesigning + notarization (the DMG is ad-hoc signed today)
 
-Known limits: exotic keyboard layouts fall back to `us`.
+Known limits: exotic keyboard layouts fall back to `us`, and macOS-reserved
+chords — Spotlight's ⌘Space, ⌘Tab, Mission Control — stay on the Mac even while
+captured (⌃Space stands in for the remote's launcher).
 
 ## Documentation
 

@@ -78,11 +78,32 @@ struct Cli {
     /// click it again.
     #[arg(long, default_value = "shift+escape")]
     release_hotkey: String,
+    /// Chord that opens the remote's launcher while the keyboard is
+    /// captured, translated to super+space on the remote. On macOS this
+    /// bridges the chords the system keeps from apps: Spotlight serves
+    /// ⌘Space itself, and GTK's macOS backend drops ⌥Space (its NBSP
+    /// character never becomes a key event) — ⌃Space arrives and stands
+    /// in. `none` disables; the forms are as for `--release-hotkey`.
+    #[arg(long, default_value_t = default_launcher_hotkey())]
+    launcher_hotkey: String,
     /// Video pipeline: `gpu` (Vulkan compute + VA-API, falling back to the
     /// CPU when unavailable) or `cpu` (force OpenH264 on the CPU). Overrides
     /// the MAC_GLIFF_VIDEO environment variable.
     #[arg(long, value_parser = ["gpu", "cpu"])]
     video: Option<String>,
+}
+
+/// The launcher chord ships on for macOS — on Linux the real super keys
+/// reach the remote anyway, so the translation starts off. ⌥Space would
+/// be the natural pick, but GTK's macOS backend drops the key event its
+/// NBSP keyval rides on (the Option key mutates keyvals), so ⌃Space it
+/// is: ctrl leaves the characters plain enough to arrive.
+fn default_launcher_hotkey() -> String {
+    if cfg!(target_os = "macos") {
+        "ctrl+space".into()
+    } else {
+        "none".into()
+    }
 }
 
 /// Everything the UI shares with its callbacks.
@@ -444,11 +465,17 @@ fn build_ui(app: &adw::Application, cli: &Cli) {
         keymap: keymap::watch(),
     });
 
-    let hotkey = ReleaseHotkey::parse(&cli.release_hotkey).unwrap_or_else(|e| {
+    let hotkey = Hotkey::parse(&cli.release_hotkey).unwrap_or_else(|e| {
         tracing::warn!(error = %e, "invalid --release-hotkey; shortcut release disabled");
-        ReleaseHotkey::None
+        Hotkey::None
     });
-    install_input_handlers(&ui, &video, &window, hotkey);
+    let launcher = Hotkey::parse(&cli.launcher_hotkey).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "invalid --launcher-hotkey; no launcher translation");
+        Hotkey::None
+    });
+    install_input_handlers(&ui, &video, &window, hotkey, launcher);
+    #[cfg(target_os = "macos")]
+    install_local_shortcuts(&ui);
     install_resize_handler(&ui);
     install_address_bar(&ui, &connect_btn);
     refresh_tabs(&ui);
@@ -1447,9 +1474,9 @@ fn send_to(s: &Session, msg: ClientMsg) {
     }
 }
 
-/// How the user releases captured shortcuts back to the local compositor.
+/// A user-configured hotkey: `none`, a chord, or a double-tap.
 #[derive(Clone)]
-enum ReleaseHotkey {
+enum Hotkey {
     None,
     DoubleTap {
         keyval: gdk::Key,
@@ -1466,7 +1493,7 @@ const CHORD_MODS: gdk::ModifierType = gdk::ModifierType::CONTROL_MASK
     .union(gdk::ModifierType::SHIFT_MASK)
     .union(gdk::ModifierType::SUPER_MASK);
 
-impl ReleaseHotkey {
+impl Hotkey {
     fn parse(spec: &str) -> Result<Self, String> {
         let s = spec.trim();
         if s.is_empty() || s.eq_ignore_ascii_case("none") {
@@ -1496,7 +1523,7 @@ impl ReleaseHotkey {
         }
         match keyval {
             Some(keyval) => Ok(Self::Chord { mods, keyval }),
-            None => Err(format!("no key in release hotkey '{spec}'")),
+            None => Err(format!("no key in hotkey '{spec}'")),
         }
     }
 
@@ -1512,23 +1539,47 @@ impl ReleaseHotkey {
         match self {
             Self::None => false,
             Self::Chord { mods, keyval: k } => keyval == *k && (state & CHORD_MODS) == *mods,
-            Self::DoubleTap { keyval: k, within } => {
-                if keyval != *k {
-                    return false;
-                }
-                let now = Instant::now();
-                let mut lt = last_tap.borrow_mut();
-                match *lt {
-                    Some(prev) if now.duration_since(prev) <= *within => {
-                        *lt = None;
-                        true
-                    }
-                    _ => {
-                        *lt = Some(now);
-                        false
-                    }
-                }
+            Self::DoubleTap { keyval: k, within } => keyval == *k && double_tap(*within, last_tap),
+        }
+    }
+
+    /// True if this press is the trigger, matched on the physical key.
+    /// macOS mutates the keyval under Option — ⌥Space arrives as U+00A0,
+    /// ⌥P as π — so a chord carrying ALT can never match its key's name;
+    /// the evdev code of the hardware keycode is modifier-stable.
+    #[cfg(target_os = "macos")]
+    fn matches_physical(
+        &self,
+        keycode: u16,
+        state: gdk::ModifierType,
+        last_tap: &RefCell<Option<Instant>>,
+    ) -> bool {
+        let Some(code) = kbd::evdev_code(keycode) else {
+            return false;
+        };
+        match self {
+            Self::None => false,
+            Self::Chord { mods, keyval: k } => {
+                (state & CHORD_MODS) == *mods && keyval_to_evdev(*k) == Some(code)
             }
+            Self::DoubleTap { keyval: k, within } => {
+                keyval_to_evdev(*k) == Some(code) && double_tap(*within, last_tap)
+            }
+        }
+    }
+
+    /// The evdev code of the key a match fires on, if the key names one
+    /// the table knows.
+    #[cfg(target_os = "macos")]
+    fn evdev(&self) -> Option<u32> {
+        self.keyval().and_then(keyval_to_evdev)
+    }
+
+    /// The key a match fires on, if any.
+    fn keyval(&self) -> Option<gdk::Key> {
+        match self {
+            Self::None => None,
+            Self::DoubleTap { keyval, .. } | Self::Chord { keyval, .. } => Some(*keyval),
         }
     }
 
@@ -1566,6 +1617,90 @@ impl ReleaseHotkey {
             }
         }
     }
+}
+
+/// Record a tap and report whether it was the quick second one.
+fn double_tap(within: Duration, last_tap: &RefCell<Option<Instant>>) -> bool {
+    let now = Instant::now();
+    let mut lt = last_tap.borrow_mut();
+    match *lt {
+        Some(prev) if now.duration_since(prev) <= within => {
+            *lt = None;
+            true
+        }
+        _ => {
+            *lt = Some(now);
+            false
+        }
+    }
+}
+
+/// The evdev code a chord key names, through the ANSI virtual keys. The
+/// letters and digits come from `to_unicode`; the named specials that
+/// carry none are matched on their `gdk::Key` constants.
+#[cfg(target_os = "macos")]
+fn keyval_to_evdev(key: gdk::Key) -> Option<u32> {
+    let kvk: u16 = if key == gdk::Key::Escape {
+        0x35
+    } else if key == gdk::Key::Return || key == gdk::Key::KP_Enter {
+        0x24
+    } else if key == gdk::Key::Tab {
+        0x30
+    } else if key == gdk::Key::space {
+        0x31
+    } else {
+        match key.to_unicode()? {
+            'a' => 0x00,
+            's' => 0x01,
+            'd' => 0x02,
+            'f' => 0x03,
+            'h' => 0x04,
+            'g' => 0x05,
+            'z' => 0x06,
+            'x' => 0x07,
+            'c' => 0x08,
+            'v' => 0x09,
+            'b' => 0x0B,
+            'q' => 0x0C,
+            'w' => 0x0D,
+            'e' => 0x0E,
+            'r' => 0x0F,
+            'y' => 0x10,
+            't' => 0x11,
+            '1' => 0x12,
+            '2' => 0x13,
+            '3' => 0x14,
+            '4' => 0x15,
+            '6' => 0x16,
+            '5' => 0x17,
+            '=' => 0x18,
+            '9' => 0x19,
+            '7' => 0x1A,
+            '-' => 0x1B,
+            '8' => 0x1C,
+            '0' => 0x1D,
+            ']' => 0x1E,
+            'o' => 0x1F,
+            'u' => 0x20,
+            '[' => 0x21,
+            'i' => 0x22,
+            'p' => 0x23,
+            'l' => 0x25,
+            'j' => 0x26,
+            '\'' => 0x27,
+            'k' => 0x28,
+            ';' => 0x29,
+            '\\' => 0x2A,
+            ',' => 0x2B,
+            '/' => 0x2C,
+            'n' => 0x2D,
+            'm' => 0x2E,
+            '.' => 0x2F,
+            '`' => 0x32,
+            _ => return None,
+        }
+    };
+    kbd::evdev_code(kvk)
 }
 
 /// Resolve a key name to a `gdk::Key`, accepting lower-case and a few aliases.
@@ -1638,11 +1773,158 @@ fn track_key(ui: &App, code: u32, pressed: bool) -> bool {
     }
 }
 
+// Linux evdev keycodes — the codes `kbd` maps every platform's keys to,
+// named here because the launcher chord synthesizes keys with no local
+// event to translate.
+const KEY_LEFTCTRL: u32 = 29;
+const KEY_LEFTALT: u32 = 56;
+const KEY_SPACE: u32 = 57;
+const KEY_LEFTSHIFT: u32 = 42;
+const KEY_LEFTMETA: u32 = 125;
+
+/// The evdev codes of a chord's modifier keys, in a fixed order.
+fn chord_mod_codes(mods: gdk::ModifierType) -> Vec<u32> {
+    let mut codes = Vec::new();
+    if mods.contains(gdk::ModifierType::CONTROL_MASK) {
+        codes.push(KEY_LEFTCTRL);
+    }
+    if mods.contains(gdk::ModifierType::ALT_MASK) {
+        codes.push(KEY_LEFTALT);
+    }
+    if mods.contains(gdk::ModifierType::SHIFT_MASK) {
+        codes.push(KEY_LEFTSHIFT);
+    }
+    if mods.contains(gdk::ModifierType::SUPER_MASK) {
+        codes.push(KEY_LEFTMETA);
+    }
+    codes
+}
+
+/// Record and forward a key event, skipping auto-repeats and releases of
+/// keys whose press never went.
+fn forward_key(ui: &App, code: u32, pressed: bool) {
+    if track_key(ui, code, pressed) {
+        send(
+            ui,
+            ClientMsg::Key {
+                keycode: code,
+                pressed,
+            },
+        );
+    }
+}
+
+/// Begin the launcher chord on the remote: lift the modifiers the chord
+/// was struck with — their key events already went out, so the remote
+/// holds them — then press super and space there instead.
+fn arm_launcher(ui: &App, launcher: &Hotkey) {
+    if let Hotkey::Chord { mods, .. } = launcher {
+        for code in chord_mod_codes(*mods) {
+            forward_key(ui, code, false);
+        }
+    }
+    tracing::debug!("launcher chord armed: super+space down on the remote");
+    forward_key(ui, KEY_LEFTMETA, true);
+    forward_key(ui, KEY_SPACE, true);
+}
+
+/// End the launcher chord: lift space and super, then press back the
+/// chord modifiers still held locally, so the remote mirrors the
+/// physical keyboard again.
+fn finish_launcher(ui: &App, launcher: &Hotkey, armed: &Cell<bool>, state: gdk::ModifierType) {
+    tracing::debug!("launcher chord finished: super+space up on the remote");
+    forward_key(ui, KEY_SPACE, false);
+    forward_key(ui, KEY_LEFTMETA, false);
+    if let Hotkey::Chord { mods, .. } = launcher {
+        for code in chord_mod_codes(state & *mods) {
+            forward_key(ui, code, true);
+        }
+    }
+    armed.set(false);
+}
+
+/// The macOS menu shortcuts we handle locally. Matched on the `kVK_*`
+/// keycode, so the physical key works on any keyboard layout.
+#[cfg(target_os = "macos")]
+enum LocalShortcut {
+    /// ⌘Q: close the window, ending the app and with it every session.
+    Quit,
+    /// ⌘W: close the shown machine's tab — the address bar's edit first,
+    /// a running session next, the window when there is neither.
+    CloseTab,
+    /// ⌘T/⌘N: the app is one tabbed window, so both open the address bar
+    /// for a new connection.
+    NewTab,
+}
+
+/// The local ⌘ shortcut for a key event, if any. The macOS backend reports
+/// Command as `META_MASK` (`SUPER_MASK` is accepted too, in case a future
+/// GTK maps it there). Chords carrying other modifiers — ⌘⇧Q, ⌘⌥W, ... —
+/// are not ours and fall through.
+#[cfg(target_os = "macos")]
+fn local_shortcut(keycode: u16, state: gdk::ModifierType) -> Option<LocalShortcut> {
+    use gdk::ModifierType as M;
+    if !state.intersects(M::META_MASK | M::SUPER_MASK)
+        || state.intersects(M::CONTROL_MASK | M::ALT_MASK | M::SHIFT_MASK)
+    {
+        return None;
+    }
+    Some(match keycode {
+        0x0C => LocalShortcut::Quit,          // kVK_ANSI_Q
+        0x0D => LocalShortcut::CloseTab,      // kVK_ANSI_W
+        0x11 | 0x2D => LocalShortcut::NewTab, // kVK_ANSI_T, kVK_ANSI_N
+        _ => return None,
+    })
+}
+
+/// The macOS window shortcuts — ⌘Q, ⌘W, ⌘T, ⌘N — on the window itself,
+/// in the bubble phase.
+///
+/// That ordering is the whole trick: while the keyboard is captured the
+/// picture's own key controller consumes every event first and returns
+/// `Stop`, so a captured ⌘W closes the remote's window, not our tab. This
+/// controller only ever sees keys nobody local claimed: with the capture
+/// released, before the picture is focused, or while the address bar is
+/// in use.
+#[cfg(target_os = "macos")]
+fn install_local_shortcuts(ui: &Rc<App>) {
+    let key = gtk::EventControllerKey::new();
+    {
+        let ui = ui.clone();
+        key.connect_key_pressed(move |_, _keyval, keycode, state| {
+            let Some(shortcut) = local_shortcut(keycode as u16, state) else {
+                return glib::Propagation::Proceed;
+            };
+            match shortcut {
+                LocalShortcut::Quit => {
+                    ui.window.close();
+                }
+                LocalShortcut::CloseTab => {
+                    if address_bar_in_use(&ui.window, &ui.entry) {
+                        cancel_address_edit(&ui);
+                    } else if let Some(s) = active(&ui) {
+                        stop_session(&ui, &s.name);
+                    } else {
+                        ui.window.close();
+                    }
+                }
+                LocalShortcut::NewTab => {
+                    show_address_bar(&ui, true);
+                    ui.entry.grab_focus();
+                }
+            }
+            glib::Propagation::Stop
+        });
+    }
+    ui.window.add_controller(key);
+}
+
 fn install_input_handlers(
     ui: &Rc<App>,
     video: &gtk::Widget,
     window: &adw::ApplicationWindow,
-    hotkey: ReleaseHotkey,
+    hotkey: Hotkey,
+    launcher: Hotkey,
 ) {
     video.set_focusable(true);
     video.set_can_focus(true);
@@ -1652,17 +1934,41 @@ fn install_input_handlers(
     // runs in the capture phase so that while the picture has the
     // keyboard every key goes to the remote, ahead of any local
     // handling.
+    //
+    // The launcher chord is the one translation on that path: it holds
+    // super+space on the remote for as long as the chord is held here.
     let key = gtk::EventControllerKey::new();
     let last_tap: Rc<RefCell<Option<Instant>>> = Rc::new(RefCell::new(None));
+    let launcher_tap: Rc<RefCell<Option<Instant>>> = Rc::new(RefCell::new(None));
+    let launcher_armed = Rc::new(Cell::new(false));
     {
         let ui = ui.clone();
         let window = window.clone();
         let hotkey = hotkey.clone();
+        let launcher = launcher.clone();
         let last_tap = last_tap.clone();
+        let launcher_tap = launcher_tap.clone();
+        let launcher_armed = launcher_armed.clone();
         key.connect_key_pressed(move |_, keyval, keycode, state| {
             if hotkey.matches(keyval, state, &last_tap) {
                 release_pressed_keys(&ui);
                 release_capture(&ui, &window);
+                return glib::Propagation::Stop;
+            }
+            // The launcher chord translates to super+space on the remote.
+            // Any other key while it is held completes it first, so its
+            // super never leaks into an ordinary chord.
+            #[cfg(target_os = "macos")]
+            let chord = launcher.matches_physical(keycode as u16, state, &launcher_tap);
+            #[cfg(target_os = "linux")]
+            let chord = launcher.matches(keyval, state, &launcher_tap);
+            if launcher_armed.get() && !chord {
+                finish_launcher(&ui, &launcher, &launcher_armed, state);
+            }
+            if chord {
+                if !launcher_armed.replace(true) {
+                    arm_launcher(&ui, &launcher);
+                }
                 return glib::Propagation::Stop;
             }
             #[cfg(target_os = "linux")]
@@ -1674,21 +1980,23 @@ fn install_input_handlers(
                 return glib::Propagation::Stop;
             };
             tracing::debug!(keycode, code, "key pressed");
-            if track_key(&ui, code, true) {
-                send(
-                    &ui,
-                    ClientMsg::Key {
-                        keycode: code,
-                        pressed: true,
-                    },
-                );
-            }
+            forward_key(&ui, code, true);
             glib::Propagation::Stop
         });
     }
     {
         let ui = ui.clone();
-        key.connect_key_released(move |_, _keyval, keycode, _state| {
+        let launcher = launcher.clone();
+        let launcher_armed = launcher_armed.clone();
+        key.connect_key_released(move |_, _keyval, keycode, state| {
+            #[cfg(target_os = "macos")]
+            let chord_key = launcher.evdev() == kbd::evdev_code(keycode as u16);
+            #[cfg(target_os = "linux")]
+            let chord_key = Some(_keyval) == launcher.keyval();
+            if launcher_armed.get() && chord_key {
+                finish_launcher(&ui, &launcher, &launcher_armed, state);
+                return;
+            }
             #[cfg(target_os = "linux")]
             let code = keycode.saturating_sub(8);
             #[cfg(target_os = "macos")]
@@ -1696,15 +2004,7 @@ fn install_input_handlers(
                 return;
             };
             tracing::debug!(keycode, code, "key released");
-            if track_key(&ui, code, false) {
-                send(
-                    &ui,
-                    ClientMsg::Key {
-                        keycode: code,
-                        pressed: false,
-                    },
-                );
-            }
+            forward_key(&ui, code, false);
         });
     }
     video.add_controller(key);
@@ -1816,10 +2116,15 @@ fn install_input_handlers(
     {
         let window = window.clone();
         let ui = ui.clone();
-        let hint = match &hotkey {
-            ReleaseHotkey::None => None,
-            hk => Some(format!("Shortcuts captured — {} to release", hk.describe())),
-        };
+        let mut parts = Vec::new();
+        if !matches!(hotkey, Hotkey::None) {
+            parts.push(format!("{} to release", hotkey.describe()));
+        }
+        if !matches!(launcher, Hotkey::None) {
+            parts.push(format!("{} opens the remote launcher", launcher.describe()));
+        }
+        let hint =
+            (!parts.is_empty()).then(|| format!("Shortcuts captured — {}", parts.join(", ")));
         focus.connect_enter(move |_| {
             tracing::debug!("video focused; inhibiting system shortcuts");
             if let Some(toplevel) = window.surface().and_downcast::<gdk::Toplevel>() {
@@ -2053,25 +2358,19 @@ mod tests {
 
     #[test]
     fn parse_chord_and_double_and_none() {
-        assert!(matches!(
-            ReleaseHotkey::parse("none").unwrap(),
-            ReleaseHotkey::None
-        ));
-        assert!(matches!(
-            ReleaseHotkey::parse("").unwrap(),
-            ReleaseHotkey::None
-        ));
+        assert!(matches!(Hotkey::parse("none").unwrap(), Hotkey::None));
+        assert!(matches!(Hotkey::parse("").unwrap(), Hotkey::None));
 
-        match ReleaseHotkey::parse("shift+escape").unwrap() {
-            ReleaseHotkey::Chord { mods, keyval } => {
+        match Hotkey::parse("shift+escape").unwrap() {
+            Hotkey::Chord { mods, keyval } => {
                 assert_eq!(mods, gdk::ModifierType::SHIFT_MASK);
                 assert_eq!(keyval, gdk::Key::Escape);
             }
             _ => panic!("expected chord"),
         }
 
-        match ReleaseHotkey::parse("Ctrl+Alt+q").unwrap() {
-            ReleaseHotkey::Chord { mods, .. } => {
+        match Hotkey::parse("Ctrl+Alt+q").unwrap() {
+            Hotkey::Chord { mods, .. } => {
                 assert!(mods.contains(gdk::ModifierType::CONTROL_MASK));
                 assert!(mods.contains(gdk::ModifierType::ALT_MASK));
             }
@@ -2079,15 +2378,15 @@ mod tests {
         }
 
         assert!(matches!(
-            ReleaseHotkey::parse("double-escape").unwrap(),
-            ReleaseHotkey::DoubleTap { .. }
+            Hotkey::parse("double-escape").unwrap(),
+            Hotkey::DoubleTap { .. }
         ));
-        assert!(ReleaseHotkey::parse("ctrl+alt").is_err());
+        assert!(Hotkey::parse("ctrl+alt").is_err());
     }
 
     #[test]
     fn chord_matches_only_with_exact_mods() {
-        let hk = ReleaseHotkey::parse("shift+escape").unwrap();
+        let hk = Hotkey::parse("shift+escape").unwrap();
         let lt = RefCell::new(None);
         assert!(hk.matches(gdk::Key::Escape, gdk::ModifierType::SHIFT_MASK, &lt));
         // Bare Escape, no Shift: not a match (so it reaches the remote).
@@ -2102,11 +2401,118 @@ mod tests {
 
     #[test]
     fn double_tap_needs_two_quick_presses() {
-        let hk = ReleaseHotkey::parse("double-escape").unwrap();
+        let hk = Hotkey::parse("double-escape").unwrap();
         let lt = RefCell::new(None);
         let none = gdk::ModifierType::empty();
         assert!(!hk.matches(gdk::Key::Escape, none, &lt)); // first tap forwarded
         assert!(hk.matches(gdk::Key::Escape, none, &lt)); // quick second releases
         assert!(!hk.matches(gdk::Key::Escape, none, &lt)); // counter reset
+    }
+
+    /// The default chord after the ⌥Space discovery: ⌃Space, exactly.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launcher_chord_default_is_ctrl_space() {
+        assert_eq!(default_launcher_hotkey(), "ctrl+space");
+    }
+
+    #[test]
+    fn launcher_chord_is_exact_alt_space() {
+        let hk = Hotkey::parse("alt+space").unwrap();
+        let lt = RefCell::new(None);
+        let alt = gdk::ModifierType::ALT_MASK;
+        let space = key_from_name("space").unwrap();
+        assert!(hk.matches(space, alt, &lt));
+        assert!(!hk.matches(space, gdk::ModifierType::empty(), &lt));
+        assert!(!hk.matches(space, alt | gdk::ModifierType::SHIFT_MASK, &lt));
+        assert!(!hk.matches(gdk::Key::Escape, alt, &lt));
+        assert_eq!(hk.keyval(), Some(space));
+    }
+
+    /// The chord modifiers map to the evdev keys the remote expects, so the
+    /// launcher translation lifts and restores exactly what it struck.
+    #[test]
+    fn chord_mod_codes_follow_their_keys() {
+        use gdk::ModifierType as M;
+        assert_eq!(chord_mod_codes(M::empty()), Vec::<u32>::new());
+        assert_eq!(chord_mod_codes(M::CONTROL_MASK), vec![29]);
+        assert_eq!(chord_mod_codes(M::ALT_MASK), vec![56]);
+        assert_eq!(chord_mod_codes(M::SHIFT_MASK), vec![42]);
+        assert_eq!(chord_mod_codes(M::SUPER_MASK), vec![125]);
+        assert_eq!(chord_mod_codes(M::CONTROL_MASK | M::ALT_MASK), vec![29, 56]);
+    }
+
+    /// On macOS the launcher chord matches the physical key, not the
+    /// keyval: Option mutates keyvals (⌥Space arrives as U+00A0), so the
+    /// match rides on the hardware keycode's evdev code.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launcher_chord_matches_the_physical_key() {
+        use gdk::ModifierType as M;
+        let hk = Hotkey::parse("alt+space").unwrap();
+        let lt = RefCell::new(None);
+
+        assert!(hk.matches_physical(0x31, M::ALT_MASK, &lt)); // kVK_Space
+        assert!(!hk.matches_physical(0x31, M::empty(), &lt));
+        assert!(!hk.matches_physical(0x31, M::ALT_MASK | M::SHIFT_MASK, &lt));
+        assert!(!hk.matches_physical(0x23, M::ALT_MASK, &lt)); // kVK_ANSI_P
+        assert_eq!(hk.evdev(), Some(57));
+    }
+
+    /// The keyval table covers the keys a chord is struck with.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keyvals_map_through_the_ansi_table() {
+        assert_eq!(keyval_to_evdev(gdk::Key::Escape), Some(1));
+        assert_eq!(keyval_to_evdev(gdk::Key::Return), Some(28));
+        assert_eq!(keyval_to_evdev(gdk::Key::Tab), Some(15));
+        assert_eq!(keyval_to_evdev(key_from_name("space").unwrap()), Some(57));
+        assert_eq!(keyval_to_evdev(key_from_name("p").unwrap()), Some(25));
+        assert_eq!(keyval_to_evdev(key_from_name("a").unwrap()), Some(30));
+        assert_eq!(keyval_to_evdev(key_from_name("q").unwrap()), Some(16));
+    }
+
+    /// The ⌘ shortcuts fire on the bare Command chord of the right key —
+    /// never with extra modifiers, never without Command, and only for the
+    /// four keys we own; anything else still reaches whoever wants it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn local_shortcut_needs_bare_command_and_own_keys() {
+        use gdk::ModifierType as M;
+        let cmd = M::META_MASK;
+
+        assert!(matches!(
+            local_shortcut(0x0C, cmd), // kVK_ANSI_Q
+            Some(LocalShortcut::Quit)
+        ));
+        assert!(matches!(
+            local_shortcut(0x0D, cmd), // kVK_ANSI_W
+            Some(LocalShortcut::CloseTab)
+        ));
+        assert!(matches!(
+            local_shortcut(0x11, cmd), // kVK_ANSI_T
+            Some(LocalShortcut::NewTab)
+        ));
+        assert!(matches!(
+            local_shortcut(0x2D, cmd), // kVK_ANSI_N
+            Some(LocalShortcut::NewTab)
+        ));
+        // A future GTK mapping Command onto SUPER_MASK keeps working.
+        assert!(matches!(
+            local_shortcut(0x0C, M::SUPER_MASK),
+            Some(LocalShortcut::Quit)
+        ));
+
+        // No Command: goes to whoever else wants the key.
+        assert!(local_shortcut(0x0C, M::empty()).is_none());
+        // Wrong or extra modifiers are not our chord.
+        assert!(local_shortcut(0x0C, cmd | M::SHIFT_MASK).is_none());
+        assert!(local_shortcut(0x0D, cmd | M::CONTROL_MASK).is_none());
+        assert!(local_shortcut(0x11, cmd | M::ALT_MASK).is_none());
+        assert!(local_shortcut(0x0C, M::CONTROL_MASK).is_none());
+        // ⌘ with any other key is the remote's business.
+        assert!(local_shortcut(0x00, cmd).is_none()); // kVK_ANSI_A
+                                                      // Command itself is not a shortcut.
+        assert!(local_shortcut(0x37, cmd).is_none()); // kVK_Command
     }
 }
