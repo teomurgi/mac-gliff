@@ -140,11 +140,17 @@ collect_from() { # seed files...
 
 collect_from "$BUNDLE/Contents/MacOS/mac-gliff.bin"
 
-# gdk-pixbuf loaders are dlopen'd, not linked: seed them too.
+# gdk-pixbuf loaders are dlopen'd, not linked: seed them too. Brew's
+# own loaders are .so; librsvg ships its svg loader as both .so and
+# .dylib — seed every module file so nothing keeps brew load commands.
 LOADERS_DIR=$(echo "$BREW"/lib/gdk-pixbuf-2.0/*/loaders)
-mkdir -p "$RES/lib/gdk-pixbuf-2.0/2.10.0"
-cp -RLL "$LOADERS_DIR" "$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders"
-collect_from "$RES"/lib/gdk-pixbuf-2.0/2.10.0/loaders/*.so
+mkdir -p "$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+# Copy the loaders' contents into the mkdir'd directory: /bin/cp's
+# create-the-destination path for `cp -R src dst` fails with ENOENT
+# on this machine, while copying into an existing directory works.
+cp -RLL "$LOADERS_DIR"/. "$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+LOADERS=("$RES"/lib/gdk-pixbuf-2.0/2.10.0/loaders/*)
+collect_from "${LOADERS[@]}"
 
 echo "collected $(wc -l < "$WORK/seen" | tr -d ' ') libraries"
 
@@ -184,6 +190,16 @@ while IFS= read -r pair; do
 done < "$WORK/seen"
 
 
+# Brew builds some libs with an rpath into their own keg; every load
+# command now resolves through @executable_path, so strip the leftover
+# Cellar paths instead of shipping the build machine's layout.
+sort -u "$WORK/machos" | while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    for rp in $(rpaths_of "$m"); do
+        case "$rp" in "$BREW"/*) install_name_tool -delete_rpath "$rp" "$m" ;; esac
+    done
+done
+
 # install_name_tool invalidated the signatures; re-sign before anything
 # loads the rewritten libraries (the kernel kills unsigned loads).
 find "$FW" "$RES/lib" "$BUNDLE/Contents/MacOS" -type f \
@@ -192,11 +208,13 @@ find "$FW" "$RES/lib" "$BUNDLE/Contents/MacOS" -type f \
 # --- GTK resources ---------------------------------------------------------
 echo "== resources"
 
-# pixbuf loaders cache, pointing at the bundled loaders
+# pixbuf loaders cache, pointing at the bundled loaders.
 # Query the brew originals (their deps load there), then point the
 # cache at the bundled copies — never load the rewritten loaders.
-"$BREW/bin/gdk-pixbuf-query-loaders" "$LOADERS_DIR"/*.so \
-    | sed "s|^\"$LOADERS_DIR|\"$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders|" \
+# dlopen expands @executable_path in the module paths, so the cache
+# stays valid wherever the app bundle is installed.
+"$BREW/bin/gdk-pixbuf-query-loaders" "$LOADERS_DIR"/* \
+    | sed "s|^\"$LOADERS_DIR|\"@executable_path/../Resources/lib/gdk-pixbuf-2.0/2.10.0/loaders|" \
     > "$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
 
 # gsettings schemas (gtk4, libadwaita, gsettings-desktop-schemas, ...)
