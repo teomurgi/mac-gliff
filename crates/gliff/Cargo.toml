@@ -27,10 +27,5 @@ bytes.workspace = true
 serde.workspace = true
 toml = "1"
 
-[target.'cfg(target_os = "linux")'.dependencies]
-gliff-vk.workspace = true
-hypr-capture.workspace = true
-hypr-input.workspace = true
-
 [target.'cfg(target_os = "macos")'.dependencies]
 gliff-mtl.workspace = true

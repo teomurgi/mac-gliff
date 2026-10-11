@@ -638,7 +638,7 @@ mod tests {
     use crate::avcc::access_units;
 
     /// x264 High profile, 64x64, two frames (IDR + P).
-    const STREAM: &[u8] = include_bytes!("../../gliff-va/src/h264/testdata/x264-64x64.264");
+    const STREAM: &[u8] = include_bytes!("../testdata/x264-64x64.264");
 
     #[test]
     fn decodes_the_fixture() {

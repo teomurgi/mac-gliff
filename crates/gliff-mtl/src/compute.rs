@@ -702,7 +702,7 @@ mod tests {
         use crate::avcc::access_units;
         use crate::vt::Decoder;
 
-        const STREAM: &[u8] = include_bytes!("../../gliff-va/src/h264/testdata/x264-64x64.264");
+        const STREAM: &[u8] = include_bytes!("../testdata/x264-64x64.264");
         let au = &access_units(STREAM)[0];
         let mut d = Decoder::new_software().unwrap();
         let frame = d.decode(au).unwrap().expect("a picture out");

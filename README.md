@@ -78,7 +78,7 @@ no relay. Only coded H.264 crosses the network.
 ```sh
 git clone https://github.com/teomurgi/mac-gliff && cd mac-gliff
 brew install pkg-config gtk4 libadwaita
-bin/build -p gliff                       # the client; the server crates build on Linux
+bin/build -p gliff                       # the client
 ./target/release/mac-gliff user@host
 ```
 
@@ -98,9 +98,8 @@ It is ad-hoc signed only, so Gatekeeper asks on the first launch of a
 downloaded copy. No Homebrew formula yet.
 
 On the Hyprland machine, install `gliff-server` from upstream — `omarchy pkg add gliff`
-from the [Omarchy Package Repository](https://github.com/omacom/omarchy-pkgs), or [build
-it from source](https://github.com/omacom/gliff#install) — or build it from this
-checkout; the vendored server crates are unchanged from upstream.
+from the [Omarchy Package Repository](https://github.com/omacom/omarchy-pkgs), or build
+it from source at the [upstream repo](https://github.com/omacom/gliff#install).
 
 ## Use
 
@@ -150,8 +149,7 @@ captured (⌃Space stands in for the remote's launcher).
   measurements (upstream; the macOS tier follows the same shape)
 - **[docs/hardware-quirks.md](docs/hardware-quirks.md)** — what each GPU driver and
   compositor does, and what is tested where
-- **[docs/development.md](docs/development.md)** — building, running on one machine, and
-  the tests
+- **[docs/development.md](docs/development.md)** — building and the tests
 
 ## Contributing
 

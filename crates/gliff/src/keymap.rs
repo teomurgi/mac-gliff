@@ -2,8 +2,8 @@
 //! both ends. It follows the active keyboard layout: a change of layout
 //! mid-session is sent on.
 //!
-//! On Linux the compositor's keymap is watched directly (Hyprland via
-//! `hypr-input`). On macOS the active keyboard input source is read
+//! Upstream's Linux client watches the compositor's keymap directly
+//! (Hyprland via `hypr-input`). On macOS the active keyboard input source is read
 //! from Text Input Sources, mapped to the closest xkb layout, and the
 //! corresponding pre-generated keymap text (see `scripts/gen-keymaps.sh`)
 //! is shipped — the client itself needs no xkb machinery.
@@ -22,16 +22,6 @@ pub const FIRST_KEYMAP_WAIT: Duration = Duration::from_secs(1);
 
 pub fn watch() -> Keymap {
     let (tx, rx) = watch::channel(String::new());
-    #[cfg(target_os = "linux")]
-    {
-        let sink = Box::new(move |text: String| {
-            tracing::debug!(bytes = text.len(), "local keymap changed");
-            tx.send_replace(text);
-        });
-        if let Err(e) = hypr_input::watch_keymap(hypr_input::Target::default(), sink) {
-            tracing::warn!(error = %e, "cannot follow the local keymap; server will default to us");
-        }
-    }
     #[cfg(target_os = "macos")]
     {
         use std::cell::Cell;

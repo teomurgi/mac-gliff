@@ -4,16 +4,8 @@ members = [
     "crates/gliff-proto",
     "crates/gliff-transport",
     "crates/gliff-mtl",
-    "crates/hypr-ipc",
-    "crates/hypr-wl",
-    "crates/hypr-capture",
-    "crates/hypr-input",
-    "crates/gliff-va",
-    "crates/gliff-vk",
     "crates/gliff-sw",
     "crates/gliff",
-    "crates/gliff-server",
-    "crates/gliff-probe",
 ]
 
 [workspace.package]
@@ -31,12 +23,6 @@ undocumented_unsafe_blocks = "warn"
 [workspace.dependencies]
 gliff-proto = { path = "crates/gliff-proto" }
 gliff-transport = { path = "crates/gliff-transport" }
-hypr-ipc = { path = "crates/hypr-ipc" }
-hypr-wl = { path = "crates/hypr-wl" }
-hypr-capture = { path = "crates/hypr-capture" }
-hypr-input = { path = "crates/hypr-input" }
-gliff-va = { path = "crates/gliff-va" }
-gliff-vk = { path = "crates/gliff-vk" }
 gliff-sw = { path = "crates/gliff-sw" }
 gliff-mtl = { path = "crates/gliff-mtl" }
 openh264 = { version = "0.9", features = ["source"] }
@@ -47,28 +33,12 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 minicbor = { version = "2", features = ["derive", "alloc"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "process", "sync", "time", "io-std", "fs"] }
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 rayon = "1"
-png = "0.17"
 proptest = "1"
-
-wayland-client = "0.31"
-wayland-backend = "0.3"
-wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
-wayland-protocols-wlr = { version = "0.3", features = ["client"] }
-wayland-protocols-misc = { version = "0.3", features = ["client"] }
-calloop = "0.14"
-calloop-wayland-source = "0.4"
-xkbcommon = "0.9"
-drm-fourcc = "2"
-gbm = "0.15"
-drm = "0.14"
-nix = { version = "0.30", features = ["fs", "socket", "uio", "poll"] }
-rustix = { version = "1", features = ["fs", "mm"] }
 
 gtk4 = { version = "0.11", features = ["v4_14"] }
 libadwaita = { version = "0.9", features = ["v1_5"] }

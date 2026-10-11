@@ -2,8 +2,8 @@
 //! decodes the video, shows it, and forwards keyboard and pointer input.
 //!
 //! Decode runs on a worker thread (see `net`); this file is the UI.
-//! Decoded frames arrive as GPU-tier images (a dmabuf GTK imports on
-//! Linux; a Metal texture read back on macOS) or plain BGRA pixels.
+//! Decoded frames arrive as GPU-tier images (a Metal texture read back
+//! on macOS) or plain BGRA pixels.
 
 mod clipboard;
 mod clipboard_ui;
@@ -19,8 +19,6 @@ mod theme;
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
-#[cfg(target_os = "linux")]
-use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{channel, sync_channel, Receiver};
@@ -30,8 +28,6 @@ use adw::prelude::*;
 use clap::Parser;
 use gliff_proto::{Axis, ClientMsg};
 use gliff_transport::SshTarget;
-#[cfg(target_os = "linux")]
-use gliff_vk::DisplayFrame;
 use gtk::gdk;
 use gtk::glib;
 use gtk4 as gtk;
@@ -207,8 +203,6 @@ struct Session {
     /// The output zoom last asked of the decoder; a new worker starts at 1.
     zoom: Cell<u32>,
     /// The latest frame and its view, painted when the tab is shown.
-    #[cfg(target_os = "linux")]
-    last_frame: RefCell<Option<(gdk::Texture, (u32, u32))>>,
     #[cfg(target_os = "macos")]
     last_frame: RefCell<Option<(CachedFrame, (u32, u32))>>,
     cursor: RefCell<Option<gdk::Cursor>>,
@@ -320,9 +314,6 @@ windowcontrols > button:hover > image,
 windowcontrols > button:active > image { color: rgba(0, 0, 0, 0.55); }
 windowcontrols > button:backdrop > image { background-color: alpha(currentColor, 0.3); }
 "#;
-/// Nothing to paint on Linux: the compositor draws the window chrome.
-#[cfg(not(target_os = "macos"))]
-const WINDOW_CONTROLS_CSS: &str = "";
 
 /// The one window: a header with a tab per machine and the address bar, the
 /// remote screen (black until connected) with any status over it.
@@ -443,8 +434,6 @@ fn build_ui(app: &adw::Application, cli: &Cli) {
         {
             tier_stack.clone().upcast()
         }
-        #[cfg(target_os = "linux")]
-        picture.clone().upcast()
     };
 
     let transfers = Rc::new(clipboard_ui::TransferBars::new());
@@ -946,14 +935,6 @@ fn show_session(ui: &Rc<App>, s: &Rc<Session>) {
             ui.gl.clear();
         }
     }
-    #[cfg(target_os = "linux")]
-    match &*s.last_frame.borrow() {
-        Some((texture, view)) => {
-            ui.frame
-                .set_frame(texture.clone(), ui.video.scale_factor(), *view)
-        }
-        None => ui.frame.clear(),
-    }
     ui.video.set_cursor(s.cursor.borrow().as_ref());
     // A background session kept the size the window had when it was last
     // shown.
@@ -1202,7 +1183,7 @@ fn poll_frames(ui: Rc<App>, s: Rc<Session>, rx: Receiver<Picture>, generation: u
 
 /// Show one frame on the video display; `false` when it could not be
 /// shown. On macOS the Metal tier draws zero-copy through the GLArea;
-/// every other tier goes through a `gdk::Texture` as on Linux.
+/// every other tier goes through a `gdk::Texture`.
 fn show_frame(ui: &Rc<App>, s: &Rc<Session>, frame: Frame, view: (u32, u32)) -> bool {
     #[cfg(target_os = "macos")]
     if let Frame::Metal(f) = frame {
@@ -1222,8 +1203,6 @@ fn show_frame(ui: &Rc<App>, s: &Rc<Session>, frame: Frame, view: (u32, u32)) -> 
                 #[cfg(target_os = "macos")]
                 ui.tier_stack.set_visible_child_name("texture");
             }
-            #[cfg(target_os = "linux")]
-            let cached = texture.clone();
             #[cfg(target_os = "macos")]
             let cached = CachedFrame::Texture(texture.clone());
             *s.last_frame.borrow_mut() = Some((cached, view));
@@ -1236,13 +1215,10 @@ fn show_frame(ui: &Rc<App>, s: &Rc<Session>, frame: Frame, view: (u32, u32)) -> 
     }
 }
 
-/// Wrap a decoded frame as a GDK texture: the GPU tier's dmabuf import
-/// on Linux, a plain memory texture for the CPU tier. On macOS the
-/// Metal tier never lands here; the GL widget draws it.
+/// Wrap a decoded frame as a GDK texture: a plain memory texture for
+/// the CPU tier. The Metal tier never lands here; the GL widget draws it.
 fn frame_texture(f: Frame) -> Result<gdk::Texture, glib::Error> {
     match f {
-        #[cfg(target_os = "linux")]
-        Frame::Dmabuf(f) => dmabuf_texture(f),
         #[cfg(target_os = "macos")]
         Frame::Metal(_) => {
             // show_frame routes Metal frames to the GLArea before
@@ -1260,33 +1236,6 @@ fn frame_texture(f: Frame) -> Result<gdk::Texture, glib::Error> {
             )
             .upcast())
         }
-    }
-}
-
-#[cfg(target_os = "linux")]
-/// Wrap a decoded frame's dmabuf as a GDK texture. The frame (and its fd)
-/// lives until GTK releases the texture, which returns the image to the
-/// decoder's ring.
-fn dmabuf_texture(f: DisplayFrame) -> Result<gdk::Texture, glib::Error> {
-    let display = gdk::Display::default()
-        .ok_or_else(|| glib::Error::new(glib::FileError::Failed, "no display"))?;
-    let builder = gdk::DmabufTextureBuilder::new()
-        .set_display(&display)
-        .set_width(f.width)
-        .set_height(f.height)
-        .set_fourcc(f.fourcc as u32)
-        .set_modifier(f.modifier)
-        .set_n_planes(1)
-        .set_offset(0, f.offset)
-        .set_stride(0, f.stride)
-        .set_premultiplied(false);
-    // SAFETY: the fd is a dmabuf describing exactly one linear plane of the
-    // stated size, stride and format, and the frame that owns it is kept
-    // alive by the release closure until GTK is done with the texture.
-    unsafe {
-        builder
-            .set_fd(0, f.fd.as_raw_fd())
-            .build_with_release_func(move || drop(f))
     }
 }
 
@@ -1995,8 +1944,6 @@ fn install_input_handlers(
             // super never leaks into an ordinary chord.
             #[cfg(target_os = "macos")]
             let chord = launcher.matches_physical(keycode as u16, state, &launcher_tap);
-            #[cfg(target_os = "linux")]
-            let chord = launcher.matches(keyval, state, &launcher_tap);
             if launcher_armed.get() && !chord {
                 finish_launcher(&ui, &launcher, &launcher_armed, state);
             }
@@ -2006,8 +1953,6 @@ fn install_input_handlers(
                 }
                 return glib::Propagation::Stop;
             }
-            #[cfg(target_os = "linux")]
-            let code = keycode.saturating_sub(8);
             // GDK on macOS reports kVK_* virtual keys, translated
             // positionally to evdev codes.
             #[cfg(target_os = "macos")]
@@ -2026,14 +1971,10 @@ fn install_input_handlers(
         key.connect_key_released(move |_, _keyval, keycode, state| {
             #[cfg(target_os = "macos")]
             let chord_key = launcher.evdev() == kbd::evdev_code(keycode as u16);
-            #[cfg(target_os = "linux")]
-            let chord_key = Some(_keyval) == launcher.keyval();
             if launcher_armed.get() && chord_key {
                 finish_launcher(&ui, &launcher, &launcher_armed, state);
                 return;
             }
-            #[cfg(target_os = "linux")]
-            let code = keycode.saturating_sub(8);
             #[cfg(target_os = "macos")]
             let Some(code) = kbd::evdev_code(keycode as u16) else {
                 return;

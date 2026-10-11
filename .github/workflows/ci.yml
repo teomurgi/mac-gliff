@@ -10,41 +10,23 @@ permissions:
 
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            args: "-p gliff-mtl -p gliff-proto -p gliff"
-          - os: macos-15
-            args: "-p gliff-mtl -p gliff"
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: GTK and GPU-tier dev libraries (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libva-dev \
-            libgbm-dev libdrm-dev libxkbcommon-dev libvulkan-dev nasm pkg-config
-      - name: GTK dev libraries (macOS)
-        if: matrix.os == 'macos-15'
+      - name: GTK dev libraries
         run: brew install pkg-config gtk4 libadwaita
       - name: Format
-        if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy ${{ matrix.args }} --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
-        run: cargo test ${{ matrix.args }}
+        run: cargo test --workspace
       - name: DMG
-        if: matrix.os == 'macos-15'
         run: macos/build-dmg.sh
       - name: Upload DMG
-        if: matrix.os == 'macos-15'
         uses: actions/upload-artifact@v5
         with:
           name: mac-gliff-dmg

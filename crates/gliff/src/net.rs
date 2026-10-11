@@ -1,9 +1,9 @@
 //! The client's network and decode worker: connect (TCP or ssh), run the
-//! protocol, decode the streams on the GPU, and hand finished display frames
-//! (dmabufs) to the GTK thread. Input commands flow the other way.
+//! protocol, decode the streams on the GPU, and hand finished display
+//! frames to the GTK thread. Input commands flow the other way.
 //!
-//! The Vulkan objects live entirely on this worker thread; only dmabuf fds
-//! and plain values cross to the GTK thread.
+//! The VideoToolbox and Metal objects live entirely on this worker
+//! thread; only plain values cross to the GTK thread.
 
 use std::rc::Rc;
 use std::sync::mpsc::{Sender as StdSender, SyncSender};
@@ -22,8 +22,6 @@ use gliff_sw::VideoMode;
 use gliff_transport::clipboard::progress::Progress;
 use gliff_transport::clipboard::{outbound_channel, Side, Transfers};
 use gliff_transport::{spawn_ssh, Framed, SshTarget};
-#[cfg(target_os = "linux")]
-use gliff_vk::{Decoder as GpuDecoder, DisplayFrame, Gpu};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{self, unbounded_channel, UnboundedReceiver};
 
@@ -110,12 +108,9 @@ pub enum Endpoint {
     Ssh(SshTarget),
 }
 
-/// A decoded frame for the GTK thread: the GPU tier's frame (a dmabuf
-/// on Linux, a Metal texture on macOS), or plain BGRA pixels from the
-/// CPU tier.
+/// A decoded frame for the GTK thread: the GPU tier's frame (a Metal
+/// texture), or plain BGRA pixels from the CPU tier.
 pub enum Frame {
-    #[cfg(target_os = "linux")]
-    Dmabuf(DisplayFrame),
     #[cfg(target_os = "macos")]
     Metal(gliff_mtl::compute::BgraFrame),
     Bgra(gliff_sw::PooledFrame),
@@ -126,8 +121,6 @@ impl Frame {
     /// redraw reuses.
     fn is_gpu(&self) -> bool {
         match self {
-            #[cfg(target_os = "linux")]
-            Self::Dmabuf(_) => true,
             #[cfg(target_os = "macos")]
             Self::Metal(_) => true,
             Self::Bgra(_) => false,
@@ -204,12 +197,9 @@ impl Worker {
     }
 }
 
-/// The decode pipeline: the GPU tier (VA-API decode + Vulkan compute on
-/// Linux, VideoToolbox decode + Metal compute on macOS), or OpenH264
-/// on the CPU.
+/// The decode pipeline: the GPU tier (VideoToolbox decode + Metal
+/// compute), or OpenH264 on the CPU.
 enum VideoDecoder {
-    #[cfg(target_os = "linux")]
-    Gpu(Box<GpuDecoder>),
     #[cfg(target_os = "macos")]
     Metal(Box<GpuDecoder>),
     Cpu(Box<gliff_sw::Decoder>),
@@ -218,25 +208,6 @@ enum VideoDecoder {
 /// Open the GPU for decoding, or `None` for the CPU tier. In GPU mode
 /// a machine without the platform's decode stack falls back to the
 /// CPU.
-#[cfg(target_os = "linux")]
-fn open_gpu(mode: VideoMode) -> Option<Arc<Gpu>> {
-    if mode == VideoMode::Cpu {
-        tracing::info!("using the CPU video pipeline as requested");
-        return None;
-    }
-    match Gpu::open(Some(&hypr_capture::render_node(None))) {
-        Ok(gpu) if gpu.can_decode() => Some(gpu),
-        Ok(gpu) => {
-            tracing::warn!(gpu = %gpu.name, "no VA-API H.264 decoder; falling back to the CPU pipeline");
-            None
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "no usable GPU; falling back to the CPU pipeline");
-            None
-        }
-    }
-}
-
 #[cfg(target_os = "macos")]
 fn open_gpu(mode: VideoMode) -> Option<Arc<Gpu>> {
     if mode == VideoMode::Cpu {
@@ -250,25 +221,6 @@ fn open_gpu(mode: VideoMode) -> Option<Arc<Gpu>> {
             None
         }
     }
-}
-
-#[cfg(target_os = "linux")]
-fn new_decoder(
-    gpu: &Option<Arc<Gpu>>,
-    chroma: ChromaMode,
-    width: u32,
-    height: u32,
-) -> anyhow::Result<VideoDecoder> {
-    let dual = chroma != ChromaMode::Single420;
-    if let Some(gpu) = gpu {
-        match GpuDecoder::new(gpu, dual, width, height) {
-            Ok(d) => return Ok(VideoDecoder::Gpu(Box::new(d))),
-            Err(e) => {
-                tracing::warn!(error = %e, "cannot create the GPU decoder; falling back to the CPU pipeline");
-            }
-        }
-    }
-    Ok(VideoDecoder::Cpu(Box::new(gliff_sw::Decoder::new(dual)?)))
 }
 
 #[cfg(target_os = "macos")]
@@ -293,8 +245,6 @@ fn new_decoder(
 impl VideoDecoder {
     fn label(&self) -> &'static str {
         match self {
-            #[cfg(target_os = "linux")]
-            Self::Gpu(_) => "GPU",
             #[cfg(target_os = "macos")]
             Self::Metal(_) => "Metal",
             Self::Cpu(_) => "CPU",
@@ -305,8 +255,6 @@ impl VideoDecoder {
     /// tiers do); the CPU tier holds the previous unit's picture.
     fn returns_just_fed(&self) -> bool {
         match self {
-            #[cfg(target_os = "linux")]
-            Self::Gpu(_) => true,
             #[cfg(target_os = "macos")]
             Self::Metal(_) => true,
             Self::Cpu(_) => false,
@@ -425,8 +373,6 @@ where
         fps_cap,
     });
     let decode_on = match (&decoder, &gpu) {
-        #[cfg(target_os = "linux")]
-        (VideoDecoder::Gpu(_), Some(g)) => g.name.as_str(),
         #[cfg(target_os = "macos")]
         (VideoDecoder::Metal(_), Some(g)) => g.name.as_str(),
         _ => "cpu",
@@ -547,17 +493,6 @@ where
                 // at the new zoom now. The CPU tier has no copy to redraw
                 // and asks for a keyframe instead.
                 let redrawn = match &mut decoder {
-                    #[cfg(target_os = "linux")]
-                    VideoDecoder::Gpu(d) => match d.set_zoom(zoom).and_then(|_| d.redraw()) {
-                        Ok(frame) => {
-                            tracing::info!(zoom = d.zoom(), "decoder output zoom");
-                            frame.map(Frame::Dmabuf)
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "could not change the output zoom");
-                            None
-                        }
-                    },
                     #[cfg(target_os = "macos")]
                     VideoDecoder::Metal(d) => match d.set_zoom(zoom).and_then(|_| d.redraw()) {
                         Ok(frame) => {
@@ -623,8 +558,6 @@ where
                                 None
                             }
                         },
-                        #[cfg(target_os = "linux")]
-                        VideoDecoder::Gpu(_) => None,
                         #[cfg(target_os = "macos")]
                         VideoDecoder::Metal(_) => None,
                     },
@@ -663,18 +596,6 @@ where
                 in_decoder.push_back(((width, height), view, scale_milli));
                 let t0 = std::time::Instant::now();
                 let decoded = match &mut decoder {
-                    #[cfg(target_os = "linux")]
-                    VideoDecoder::Gpu(d) => {
-                        // A decoder made by a StreamConfig starts at zoom 1.
-                        if d.zoom() != zoom {
-                            if let Err(e) = d.set_zoom(zoom) {
-                                tracing::warn!(error = %e, "could not change the output zoom");
-                            }
-                        }
-                        d.decode(&main, &aux)
-                            .map(|f| f.map(Frame::Dmabuf))
-                            .map_err(anyhow::Error::from)
-                    }
                     #[cfg(target_os = "macos")]
                     VideoDecoder::Metal(d) => {
                         // A decoder made by a StreamConfig starts at zoom 1.

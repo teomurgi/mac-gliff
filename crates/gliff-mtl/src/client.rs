@@ -210,7 +210,7 @@ mod tests {
     use crate::display;
     use gliff_proto::chroma::Nv12;
 
-    const STREAM: &[u8] = include_bytes!("../../gliff-va/src/h264/testdata/x264-64x64.264");
+    const STREAM: &[u8] = include_bytes!("../testdata/x264-64x64.264");
 
     fn max_delta(a: &[u8], b: &[u8]) -> i32 {
         a.iter()

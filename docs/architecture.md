@@ -49,16 +49,12 @@ video, cursor and pongs flow server→client.
 |---|---|---|
 | `gliff-proto` | wire messages, framing header, CPU reference for colour and the AVC444 split/recombine | none |
 | `gliff-transport` | `Framed` length-prefixed IO with out-of-band payloads (`write_vectored`), the clipboard transfer engine and file spool, ssh spawn | none |
-| `hypr-ipc` | Hyprland control socket (instance discovery, outputs, options) | none |
-| `hypr-wl` | shared Wayland plumbing (connect, globals, output/seat tracking, calloop runner) | none |
-| `hypr-capture` | output + cursor capture into GBM dmabufs on a calloop thread | none |
-| `hypr-input` | virtual keyboard (xkb state) + virtual pointer + clipboard bridge (mime types and pipes) on calloop threads | none |
-| `gliff-va` | libva display, H.264 encode/decode contexts on driver-owned surfaces, dmabuf export, the H.264 header parser and writer | yes, libva calls through committed bindgen output |
-| `gliff-vk` | Vulkan device, dmabuf import/export, split/recombine compute, the pipeline that hands surfaces to `gliff-va` | yes, Vulkan API calls |
 | `gliff-sw` | CPU fallback with OpenH264 encode/decode, fused BGRA<->I420 conversion | the encoder trace level through the raw API, and the AVX2 row kernels (pointer loads and stores) |
-| `gliff-server` | ties capture+input+encoder to the protocol; `--stdio`/`--listen` | none |
 | `gliff` | GTK4/libadwaita UI, decode worker | one block: hands GTK a dmabuf fd |
-| `gliff-probe` | environment checks and the headless test client | none |
+
+The server-side crates — `hypr-ipc`, `hypr-wl`, `hypr-capture`, `hypr-input`,
+`gliff-va`, `gliff-vk`, `gliff-server`, `gliff-probe` — are not in this
+checkout; they live in the upstream repo, [omacom/gliff](https://github.com/omacom/gliff).
 
 `gliff-vk` wraps `ash` and `gliff-va` wraps libva; both APIs are `unsafe`
 because they cannot check lifetimes or synchronisation. The crates expose

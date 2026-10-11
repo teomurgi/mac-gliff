@@ -124,8 +124,8 @@ mod tests {
     use super::*;
 
     /// x264 High profile, 64x64, two frames (IDR + P), CABAC, 8x8
-    /// transform; shared with gliff-va's parser tests.
-    const STREAM: &[u8] = include_bytes!("../../gliff-va/src/h264/testdata/x264-64x64.264");
+    /// transform; shared by every tier's decoder tests.
+    const STREAM: &[u8] = include_bytes!("../testdata/x264-64x64.264");
 
     #[test]
     fn splits_units() {

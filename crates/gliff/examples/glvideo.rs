@@ -42,7 +42,7 @@ use gliff_mtl::client::{Decoder, Gpu};
 use glvideo::GlVideo;
 
 #[cfg(target_os = "macos")]
-const STREAM: &[u8] = include_bytes!("../../gliff-va/src/h264/testdata/x264-64x64.264");
+const STREAM: &[u8] = include_bytes!("../../gliff-mtl/testdata/x264-64x64.264");
 
 // Readback, only for the verification below.
 #[cfg(target_os = "macos")]
