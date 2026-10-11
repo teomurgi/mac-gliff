@@ -5,3 +5,4 @@ target/
 /pkgbuild/src/
 *.pkg.tar.zst
 /dist/
+.DS_Store
