@@ -9,6 +9,8 @@ out="$(dirname "$0")/../crates/gliff/keymaps"
 mkdir -p "$out"
 
 # id layout variant — the ids keymap.rs maps macOS input sources to.
+# The ids without a macOS counterpart in keymap.rs are still shipped:
+# scripts may request them by id later; keep the two lists in sync.
 while read -r id layout variant; do
     [ "$id" = "#" ] && continue
     if [ -n "$variant" ]; then
@@ -16,44 +18,97 @@ while read -r id layout variant; do
     else
         xkbcli compile-keymap --layout "$layout" > "$out/$id.xkb"
     fi
-    echo "$id: $(wc -c < "$out/$id.xkb") bytes"
 done <<'EOF'
-us us
-us-intl us intl
-us-dvorak us dvorak
-us-colemak us colemak
-gb gb
-de de
+af af 
+af-ps af ps
+af-uz af uz
+al al 
+am am 
+ara ara
+ara-azerty ara azerty
+at at 
+au au 
+az az 
+be be
+bg bg
+bg-phonetic bg phonetic
+br br
+bt bt 
+by by 
+ca-fr ca fr
 ch-de ch de
 ch-fr ch fr
-fr fr
-ca-fr ca fr
-it it
-es es
-latam latam
-nl nl
-be be
-pt pt
-br br
-dk dk
-no no
-se se
-fi fi
-pl pl
+cn-ug cn ug
 cz cz
-hu hu
-tr tr
-ru ru
-ua ua
-gr gr
-ara ara
-il il
-bg bg
-hr hr
-sk sk
-si si
-ro ro
+cz-qwerty cz qwerty
+de de
+dk dk
+dz dz 
 ee ee
+es es
+et et 
+fi fi
+fo fo 
+fr fr
+gb gb
+ge ge 
+gr gr
+gr-polytonic gr polytonic
+hr hr
+hu hu
+hu-qwerty hu qwerty
+ie ie 
+il il
+iq-ku iq ku
+ir ir 
+is is 
+it it
+jp-kana jp kana
+kg kg 
+kh kh 
+kr kr 
+kz kz 
+la la 
+latam latam
 lt lt
 lv lv
+ma-tifinagh ma tifinagh
+mk mk 
+mm mm 
+mn mn 
+mt mt 
+ng ng 
+nl nl
+no no
+no-smi no smi
+np np 
+nz nz 
+pk pk 
+pl pl
+pt pt
+ro ro
+rs rs 
+rs-latin rs latin
+ru ru
+ru-cv ru cv
+ru-phonetic ru phonetic
+ru-sah ru sah
+se se
+si si
+sk sk
+sk-qwerty sk qwerty
+th th 
+tj tj 
+tm tm 
+tr tr
+tr-f tr f
+tr-ku tr ku
+ua ua
+us us
+us-colemak us colemak
+us-dvorak us dvorak
+us-intl us intl
+uz uz 
+vn vn 
 EOF
+echo "generated $(ls "$out" | wc -l | tr -d ' ') keymaps"

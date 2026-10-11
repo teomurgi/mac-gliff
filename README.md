@@ -33,7 +33,7 @@ it natively for the Mac:
 - **Zero-copy display** — the recombine writes into an IOSurface the GTK window binds
   directly (`CGLTexImageIOSurface2D`). Decoded frame to screen, untouched.
 - **Your keyboard, your layout** — the active macOS layout is detected and mapped to its
-  xkb counterpart; 38 pre-generated keymaps ship in the binary, and layout changes are
+  xkb counterpart; 91 pre-generated keymaps ship in the binary, and layout changes are
   picked up mid-session.
 - **A CPU tier as fallback** — OpenH264 end to end when no GPU is available; `--video cpu`
   forces it.
@@ -140,8 +140,8 @@ verified from the mounted image, GTK stack and all.
 - [ ] Homebrew packaging
 - [ ] Developer ID codesigning + notarization (the DMG is ad-hoc signed today)
 
-Known limits: exotic keyboard layouts fall back to `us`, and macOS-reserved
-chords — Spotlight's ⌘Space, ⌘Tab, Mission Control — stay on the Mac even while
+Known limits: script-specific and IME-style keyboard layouts fall back to `us`, and
+macOS-reserved chords — Spotlight's ⌘Space, ⌘Tab, Mission Control — stay on the Mac even while
 captured (⌃Space stands in for the remote's launcher).
 
 ## Documentation
