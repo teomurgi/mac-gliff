@@ -165,7 +165,12 @@ impl CaptureBuffer {
                 if bgra_in_memory {
                     dst.copy_from_slice(&src[..width * 4]);
                 } else {
-                    for (d, p) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+                    for (d, p) in dst
+                        .as_chunks_mut::<4>()
+                        .0
+                        .iter_mut()
+                        .zip(src.as_chunks::<4>().0)
+                    {
                         d.copy_from_slice(&[p[2], p[1], p[0], p[3]]);
                     }
                 }

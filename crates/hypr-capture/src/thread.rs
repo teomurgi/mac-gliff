@@ -540,8 +540,10 @@ impl State {
             session_proto::Event::DmabufDevice { .. } => {}
             session_proto::Event::DmabufFormat { format, modifiers } => {
                 let mods = modifiers
-                    .chunks_exact(8)
-                    .map(|b| u64::from_ne_bytes(b.try_into().unwrap_or([0; 8])))
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|b| u64::from_ne_bytes(*b))
                     .collect();
                 c.formats.push((format, mods));
             }
@@ -805,7 +807,8 @@ impl State {
                         Ok(argb) => {
                             let (hot_x, hot_y) = self.cursor_hotspot;
                             let (width, height) = (buf.width, buf.height);
-                            let opaque = argb.chunks_exact(4).filter(|p| p[3] != 0).count();
+                            let opaque =
+                                argb.as_chunks::<4>().0.iter().filter(|p| p[3] != 0).count();
                             tracing::debug!(width, height, hot_x, hot_y, opaque, "cursor shape");
                             self.emit(CaptureEvent::CursorShape {
                                 width,
