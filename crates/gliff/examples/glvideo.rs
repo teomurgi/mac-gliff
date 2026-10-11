@@ -7,32 +7,45 @@
 //!
 //! Run on a real Mac with a GUI session:
 //! `cargo run -p gliff --example glvideo`
-#![cfg(target_os = "macos")]
+//
 // The client is a binary crate, so this example includes its modules
 // by path; methods only the full client uses read as dead here. The
 // client's own build still lints them.
 #![allow(dead_code)]
+#[cfg(target_os = "macos")]
 #[path = "../src/glvideo.rs"]
 mod glvideo;
+#[cfg(target_os = "macos")]
 #[path = "../src/paintable.rs"]
 mod paintable;
 
+#[cfg(target_os = "macos")]
 use std::cell::RefCell;
+#[cfg(target_os = "macos")]
 use std::rc::Rc;
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
 use gtk::glib;
+#[cfg(target_os = "macos")]
 use gtk::prelude::*;
+#[cfg(target_os = "macos")]
 use gtk4 as gtk;
 
+#[cfg(target_os = "macos")]
 use gliff_mtl::avcc::access_units;
+#[cfg(target_os = "macos")]
 use gliff_mtl::client::{Decoder, Gpu};
 
+#[cfg(target_os = "macos")]
 use glvideo::GlVideo;
 
+#[cfg(target_os = "macos")]
 const STREAM: &[u8] = include_bytes!("../../gliff-va/src/h264/testdata/x264-64x64.264");
 
 // Readback, only for the verification below.
+#[cfg(target_os = "macos")]
 #[link(name = "OpenGL", kind = "framework")]
 extern "C" {
     fn glPixelStorei(pname: u32, param: i32);
@@ -47,14 +60,19 @@ extern "C" {
         data: *mut std::ffi::c_void,
     );
 }
+#[cfg(target_os = "macos")]
 const GL_VIEWPORT: u32 = 0x0BA2;
+#[cfg(target_os = "macos")]
 const GL_RGBA: u32 = 0x1908;
+#[cfg(target_os = "macos")]
 const GL_UNSIGNED_BYTE: u32 = 0x1401;
+#[cfg(target_os = "macos")]
 const GL_PACK_ALIGNMENT: u32 = 0x0D05;
 
 /// Read the framebuffer and compare with the frame's pixels,
 /// nearest-upscaled by the display scale the layout used. Returns the
 /// worst channel delta.
+#[cfg(target_os = "macos")]
 fn check(area: &gtk::GLArea, frame: &gliff_mtl::compute::BgraFrame) -> i32 {
     let scale = area.scale_factor().max(1);
     let (w, h) = (
@@ -126,6 +144,7 @@ fn check(area: &gtk::GLArea, frame: &gliff_mtl::compute::BgraFrame) -> i32 {
     worst
 }
 
+#[cfg(target_os = "macos")]
 fn main() {
     let app = gtk::Application::new(None::<&str>, Default::default());
     app.connect_activate(|app| {
@@ -196,4 +215,9 @@ fn main() {
         });
     });
     app.run();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    eprintln!("glvideo: macOS-only smoke (VideoToolbox + Metal + GLArea)");
 }
