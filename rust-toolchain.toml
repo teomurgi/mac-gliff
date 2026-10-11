@@ -2,3 +2,4 @@
 # gtk-rs 0.22 puts the workspace MSRV at 1.92 (rust-version in Cargo.toml);
 # pinned to the newest stable verified to build the DMG.
 channel = "1.99.0"
+components = ["rustfmt", "clippy"]
