@@ -44,7 +44,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 /// A message plus optional trailing payload, sent from the UI to the worker.
 type OutSender = UnboundedSender<clipboard::ToWorker>;
 
-const APP_NAME: &str = "gliff";
+const APP_NAME: &str = "mac-gliff";
 
 #[derive(Parser, Clone)]
 #[command(
@@ -80,7 +80,7 @@ struct Cli {
     release_hotkey: String,
     /// Video pipeline: `gpu` (Vulkan compute + VA-API, falling back to the
     /// CPU when unavailable) or `cpu` (force OpenH264 on the CPU). Overrides
-    /// the GLIFF_VIDEO environment variable.
+    /// the MAC_GLIFF_VIDEO environment variable.
     #[arg(long, value_parser = ["gpu", "cpu"])]
     video: Option<String>,
 }

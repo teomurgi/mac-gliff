@@ -31,7 +31,15 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Which video pipeline to use, from `--video` or `GLIFF_VIDEO`.
+/// The env var selecting the video tier when `--video` is absent:
+/// `MAC_GLIFF_VIDEO` on the macOS client, `GLIFF_VIDEO` on the Linux
+/// server and probe.
+#[cfg(target_os = "macos")]
+const VIDEO_ENV: &str = "MAC_GLIFF_VIDEO";
+#[cfg(not(target_os = "macos"))]
+const VIDEO_ENV: &str = "GLIFF_VIDEO";
+
+/// Which video pipeline to use, from `--video` or the tier env var.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoMode {
     /// Vulkan compute + VA-API, falling back to the CPU when unavailable
@@ -42,7 +50,7 @@ pub enum VideoMode {
 }
 
 impl VideoMode {
-    /// `cpu` or `gpu` from the CLI, else `GLIFF_VIDEO`, else `Gpu`.
+    /// `cpu` or `gpu` from the CLI, else the tier env var, else `Gpu`.
     pub fn resolve(cli: Option<&str>) -> Self {
         let parse = |s: &str, from: &str| match s {
             "gpu" => Some(Self::Gpu),
@@ -55,9 +63,9 @@ impl VideoMode {
         if let Some(mode) = cli.and_then(|s| parse(s, "--video")) {
             return mode;
         }
-        std::env::var("GLIFF_VIDEO")
+        std::env::var(VIDEO_ENV)
             .ok()
-            .and_then(|s| parse(&s, "GLIFF_VIDEO"))
+            .and_then(|s| parse(&s, VIDEO_ENV))
             .unwrap_or(Self::Gpu)
     }
 }

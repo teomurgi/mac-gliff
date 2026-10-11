@@ -17,4 +17,4 @@ fi
 exec 9>&-
 
 cd "$GLIFF_ROOT"
-exec "$GLIFF_ROOT/target/release/gliff" "$@" >>"$GLIFF_ROOT/target/dev-run.log" 2>&1
+exec "$GLIFF_ROOT/target/release/mac-gliff" "$@" >>"$GLIFF_ROOT/target/dev-run.log" 2>&1

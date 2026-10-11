@@ -1,5 +1,5 @@
 //! The machines this client has connected to, in the order they were first
-//! connected, kept in `$XDG_CONFIG_HOME/gliff/config.toml` so the header can
+//! connected, kept in `$XDG_CONFIG_HOME/mac-gliff/config.toml` so the header
 //! offer them again as tabs. It also keeps which of them were connected and
 //! which was shown, so a reopened window connects to them again.
 
@@ -20,10 +20,10 @@ pub struct Config {
 }
 
 impl Config {
-    /// Where the client keeps its config: `~/.config/gliff/config.toml`.
+    /// Where the client keeps its config: `~/.config/mac-gliff/config.toml`.
     pub fn default_path() -> PathBuf {
         gtk4::glib::user_config_dir()
-            .join("gliff")
+            .join("mac-gliff")
             .join("config.toml")
     }
 

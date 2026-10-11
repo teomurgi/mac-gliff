@@ -44,7 +44,7 @@ Start a nested Hyprland, then inside it:
 
 ```
 gliff-server --listen 127.0.0.1:9000 --headless
-gliff --connect 127.0.0.1:9000
+mac-gliff --connect 127.0.0.1:9000
 ```
 
 `--listen` and `--connect` have no authentication and are for development
