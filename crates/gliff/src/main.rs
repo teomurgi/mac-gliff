@@ -300,6 +300,30 @@ fn window_title(endpoint: &Endpoint) -> String {
     format!("{} — Gliff", machine_name(endpoint))
 }
 
+/// The header bar's window buttons on macOS. libadwaita ships only
+/// monochrome circles, so paint the native traffic-light colours, grey
+/// them out while the window is not focused, and reveal each glyph only
+/// under the pointer, as the real title bar does.
+#[cfg(target_os = "macos")]
+const WINDOW_CONTROLS_CSS: &str = r#"
+windowcontrols > button > image { color: transparent; }
+windowcontrols > button.close > image { background-color: #ff5f57; }
+windowcontrols > button.minimize > image { background-color: #febc2e; }
+windowcontrols > button.maximize > image { background-color: #28c840; }
+windowcontrols > button.close:hover > image { background-color: #e0443e; }
+windowcontrols > button.minimize:hover > image { background-color: #dea123; }
+windowcontrols > button.maximize:hover > image { background-color: #1aab29; }
+windowcontrols > button.close:active > image { background-color: #cc3a32; }
+windowcontrols > button.minimize:active > image { background-color: #c48f1e; }
+windowcontrols > button.maximize:active > image { background-color: #179231; }
+windowcontrols > button:hover > image,
+windowcontrols > button:active > image { color: rgba(0, 0, 0, 0.55); }
+windowcontrols > button:backdrop > image { background-color: alpha(currentColor, 0.3); }
+"#;
+/// Nothing to paint on Linux: the compositor draws the window chrome.
+#[cfg(not(target_os = "macos"))]
+const WINDOW_CONTROLS_CSS: &str = "";
+
 /// The one window: a header with a tab per machine and the address bar, the
 /// remote screen (black until connected) with any status over it.
 fn build_ui(app: &adw::Application, cli: &Cli) {
@@ -312,9 +336,16 @@ fn build_ui(app: &adw::Application, cli: &Cli) {
 
     let header = adw::HeaderBar::builder()
         .show_title(false)
-        // No window buttons: closing is the compositor's job, and a stray
-        // click on an X in the middle of a remote session is a bad surprise.
-        .decoration_layout("")
+        // On Linux closing is the compositor's job, and a stray click on an
+        // X in the middle of a remote session is a bad surprise. A macOS
+        // window is CSD: its traffic lights are the header bar's start
+        // buttons, so they are shown there and nowhere else.
+        .decoration_layout(if cfg!(target_os = "macos") {
+            "close,minimize,maximize"
+        } else {
+            ""
+        })
+        .show_start_title_buttons(cfg!(target_os = "macos"))
         .build();
     let entry = gtk::Entry::builder()
         .placeholder_text("user@host")
@@ -493,7 +524,9 @@ fn build_ui(app: &adw::Application, cli: &Cli) {
     }
 
     let css = gtk::CssProvider::new();
-    css.load_from_string(concat!(
+    css.load_from_string(&format!(
+        "{}{}",
+        concat!(
         ".video { background: #000; }",
         ".status-message { color: rgba(255,255,255,0.7); font-size: 1.15em; margin: 24px; }",
         ".hint { background: rgba(0,0,0,0.7); color: #fff; padding: 6px 14px; border-radius: 999px; margin-bottom: 24px; }",
@@ -511,6 +544,8 @@ fn build_ui(app: &adw::Application, cli: &Cli) {
         ".machine-tab > button.tab-action:hover { color: currentColor; }",
         ".status-dot { min-width: 6px; min-height: 6px; border-radius: 50%; border: 1.5px solid alpha(currentColor, 0.6); }",
         ".status-dot.connected { background: var(--success-color); border-color: var(--success-color); }",
+        ),
+        WINDOW_CONTROLS_CSS
     ));
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
