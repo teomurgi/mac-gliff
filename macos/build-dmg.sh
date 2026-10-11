@@ -6,9 +6,10 @@
 # without Homebrew. Ad-hoc signed only — no Developer ID, no notarization;
 # Gatekeeper will ask on the first launch of a downloaded copy.
 #
-# Needs on the build machine: Rust >= 1.92, `brew install pkg-config
-# gtk4 libadwaita`, and the build-time tools gdk-pixbuf-query-loaders /
-# glib-compile-schemas (they come with gtk4's deps).
+# Needs on the build machine: rustup (the repo's rust-toolchain.toml
+# selects the compiler), `brew install pkg-config gtk4 libadwaita`, and
+# the build-time tools gdk-pixbuf-query-loaders / glib-compile-schemas
+# (they come with gtk4's deps).
 #
 # Written for macOS's bash 3.2: no associative arrays, no mapfile.
 set -eu

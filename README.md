@@ -70,7 +70,7 @@ no relay. Only coded H.264 crosses the network.
 
 | Side | Needs |
 |---|---|
-| **Your Mac** | [Rust](https://rustup.rs) ≥ 1.92 and the GTK 4 libraries: `brew install pkg-config gtk4 libadwaita` |
+| **Your Mac** | [Rust](https://rustup.rs) via rustup (version pinned by `rust-toolchain.toml`) and the GTK 4 libraries: `brew install pkg-config gtk4 libadwaita` |
 | **Remote machine** | Linux with [Hyprland](https://hyprland.org) running, [gliff](https://github.com/omacom/gliff) installed, and ssh access from the Mac |
 
 ## Build
