@@ -1,6 +1,10 @@
 # Changelog
 
 Derived from [conventional commits](https://www.conventionalcommits.org).
+## v0.1.1 (2026-10-11)
+### Fixes
+- Resolve ssh helpers from the GUI launch PATH ([561c507](https://github.com/teomurgi/mac-gliff/commit/561c50790cb25894b2484445a768d04f4acbe1a4))
+
 ## v0.1.0 (2026-10-11)
 ### Documentation
 - README, contributing guide and license for the public launch ([11737c1](https://github.com/teomurgi/mac-gliff/commit/11737c1f646c4a7720dd7c105b7117230e73fdf7))
