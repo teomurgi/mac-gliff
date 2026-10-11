@@ -82,8 +82,20 @@ bin/build -p gliff                       # the client; the server crates build o
 ./target/release/mac-gliff user@host
 ```
 
-No Homebrew formula yet — symlink `target/release/mac-gliff` onto your `PATH`
-yourself, or run it from the checkout.
+### As a Mac app
+
+`macos/build-dmg.sh` bundles the client with the whole GTK stack inside
+`mac-gliff.app` (libraries relocated, nothing else to install) and wraps it in a
+DMG with an `/Applications` symlink:
+
+```sh
+macos/build-dmg.sh          # -> dist/mac-gliff-<version>-<arch>.dmg
+```
+
+CI builds the same DMG on every push — grab it from the
+[Actions artifacts](https://github.com/teomurgi/mac-gliff/actions/workflows/ci.yml).
+It is ad-hoc signed only, so Gatekeeper asks on the first launch of a
+downloaded copy. No Homebrew formula yet.
 
 On the Hyprland machine, install `gliff-server` from upstream — `omarchy pkg add gliff`
 from the [Omarchy Package Repository](https://github.com/omacom/omarchy-pkgs), or [build
@@ -108,10 +120,12 @@ on one machine, paste on the other.
 Ported and tested: decode + recombine (VideoToolbox + Metal, output checked against the
 CPU reference), automatic tier selection in the client, zero-copy display (framebuffer
 verified against the decoded pixels), keyboard input for the common layouts, and the
-clipboard (verified live, both directions).
+clipboard (verified live, both directions). The DMG bundle launches standalone —
+verified from the mounted image, GTK stack and all.
 
+- [x] DMG bundle with the app icon (`macos/build-dmg.sh`; CI publishes the artifact)
 - [ ] Homebrew packaging
-- [ ] Codesigned, notarized builds
+- [ ] Developer ID codesigning + notarization (the DMG is ad-hoc signed today)
 
 Known limits: exotic keyboard layouts fall back to `us`.
 

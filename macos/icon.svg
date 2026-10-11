@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- mac-gliff: the gliff mark (pkgbuild/gliff.svg) on a macOS squircle. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2b33"/>
+      <stop offset="1" stop-color="#0e0e12"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
+  <rect x="4" y="4" width="1016" height="1016" rx="226" fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="8"/>
+  <rect x="200" y="208" width="624" height="432" rx="64" fill="#f5f1e8"/>
+  <path d="M416 288v256l64-56 48 88 56-32-48-88h88z" fill="#101010" stroke="#101010" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M512 640v96M368 784h288" fill="none" stroke="#f5f1e8" stroke-width="64" stroke-linecap="round"/>
+</svg>

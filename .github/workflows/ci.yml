@@ -40,3 +40,12 @@ jobs:
         run: cargo clippy ${{ matrix.args }} --all-targets -- -D warnings
       - name: Test
         run: cargo test ${{ matrix.args }}
+      - name: DMG
+        if: matrix.os == 'macos-15'
+        run: macos/build-dmg.sh
+      - name: Upload DMG
+        if: matrix.os == 'macos-15'
+        uses: actions/upload-artifact@v5
+        with:
+          name: mac-gliff-dmg
+          path: dist/*.dmg
