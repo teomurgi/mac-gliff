@@ -94,8 +94,9 @@ macos/build-dmg.sh          # -> dist/mac-gliff-<version>-<arch>.dmg
 
 CI builds the same DMG on every push — grab it from the
 [Actions artifacts](https://github.com/teomurgi/mac-gliff/actions/workflows/ci.yml).
-It is ad-hoc signed only, so Gatekeeper asks on the first launch of a
-downloaded copy. No Homebrew formula yet.
+The build waits on Apple to enable the developer subscription, so the DMG
+is unsigned for now (ad-hoc signature only) and Gatekeeper asks on the
+first launch of a downloaded copy. No Homebrew formula yet.
 
 On the Hyprland machine, install `gliff-server` from upstream — `omarchy pkg add gliff`
 from the [Omarchy Package Repository](https://github.com/omacom/omarchy-pkgs), or build
