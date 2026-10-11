@@ -63,7 +63,7 @@ cargo run -p gliff --example glvideo   # decodes the fixture through the
 - **GPU code is oracle-tested**: VideoToolbox + Metal output is checked
   against the CPU reference (`gliff-mtl`'s tests); keep new GPU paths under
   the same checks.
-- Commits: `<crate>: what changed` — e.g. `gliff-mtl: …`, `gliff: …`.
+- Commits follow [conventional commits](https://www.conventionalcommits.org) — `type(scope): what changed`, e.g. `feat(gliff): …`, `fix(gliff-mtl): …`, `ci: …`. CI lints every subject, and `scripts/release.sh` derives the version bump and changelog from them: breaking `!` → major, `feat` → minor, anything else → patch. The scope is the crate or area (`gliff`, `gliff-mtl`, `macos`, `ci`).
 
 ## Reporting a bug
 

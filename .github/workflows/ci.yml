@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 permissions:
@@ -10,12 +11,26 @@ permissions:
 
 jobs:
   test:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Conventional commits
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          case "$base" in
+            ''|0000000000000000000000000000000000000000) scripts/lint-commits.sh -1;;
+            *) scripts/lint-commits.sh "$base..HEAD";;
+          esac
       - name: GTK dev libraries
         run: brew install pkg-config gtk4 libadwaita
       - name: Format
@@ -31,3 +46,25 @@ jobs:
         with:
           name: mac-gliff-dmg
           path: dist/*.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: GTK dev libraries and git-cliff
+        run: brew install pkg-config gtk4 libadwaita git-cliff
+      - name: DMG
+        run: macos/build-dmg.sh
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          git-cliff --latest --strip header > notes.md
+          gh release create "$TAG" dist/*.dmg --title "$TAG" --notes-file notes.md

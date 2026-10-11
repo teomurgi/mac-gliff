@@ -48,12 +48,11 @@ into `mac-gliff.app` and a DMG — see the README.
 
 ## Release
 
-The version is set in one place, `[workspace.package]` in `Cargo.toml`.
-
-1. Set the version in `Cargo.toml`, then run `cargo build` to update
-   `Cargo.lock`.
-2. Commit the two files as "Release mac-gliff 0.2.0".
-3. Tag the commit `v0.2.0` and push the commit and the tag.
-
-CI runs the checks and builds the DMG, which is attached to the GitHub
-release.
+Run `scripts/release.sh`. It derives the next version from the
+conventional commits since the last tag (breaking `!` → major, `feat` →
+minor, anything else → patch; `--major`/`--minor`/`--patch` override),
+bumps the one version in `[workspace.package]`, refreshes `Cargo.lock`,
+prepends the section to `CHANGELOG.md` (git-cliff, `cliff.toml`), commits
+`chore(release): vX.Y.Z`, tags and pushes. The tag makes CI build the DMG
+and publish the GitHub release with that changelog section as its notes.
+The first release (no tags yet) ships the current `Cargo.toml` version.

@@ -1,0 +1,43 @@
+# git-cliff: conventional commits in, grouped changelog out.
+# scripts/release.sh uses `git-cliff --bumped-version` to derive the next
+# version (breaking `!` -> major, `feat` -> minor, anything else -> patch)
+# and prepends the new section to CHANGELOG.md.
+# Pre-conventional commits (the whole history before the first release)
+# land under "Other" instead of being dropped.
+
+[changelog]
+header = """\
+# Changelog
+
+Derived from [conventional commits](https://www.conventionalcommits.org).\
+"""
+body = """
+## {{ version }} ({% if timestamp %}{{ timestamp | date(format="%Y-%m-%d") }}{% else %}unreleased{% endif %})
+{% for group, commits in commits | group_by(attribute="group") %}\
+### {{ group }}
+{% for commit in commits %}- {{ commit.message | split(pat="\n") | first | upper_first }}{% if commit.breaking %} **BREAKING**{% endif %} ([{{ commit.id | truncate(length=7, end="") }}](https://github.com/teomurgi/mac-gliff/commit/{{ commit.id }}))
+{% endfor %}
+{% endfor %}\
+"""
+trim = true
+footer = ""
+postprocessors = []
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+protect_breaking_commits = true
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
+commit_parsers = [
+    { message = "^feat", group = "Features" },
+    { message = "^fix", group = "Fixes" },
+    { message = "^perf", group = "Performance" },
+    { message = "^doc", group = "Documentation" },
+    { message = "^refactor", group = "Refactoring" },
+    { message = "^test", group = "Testing" },
+    { message = "^chore\\(release\\)", skip = true },
+    { message = "^chore|^ci|^build|^revert", group = "Internal" },
+    { message = ".*", group = "Other" },
+]
