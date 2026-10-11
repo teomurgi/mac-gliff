@@ -10,7 +10,7 @@ Text stays sharp. All it needs between the two machines is ssh.
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 mac-gliff is a macOS port of **[gliff](https://github.com/omacom/gliff)** by Kevin
-McConnell: the Linux client's VA-API + Vulkan GPU tier, rebuilt on **VideoToolbox +
+McConnell and DHH: the Linux client's VA-API + Vulkan GPU tier, rebuilt on **VideoToolbox +
 Metal**. The server is untouched — it stays on the Linux machine.
 
 </div>
@@ -96,7 +96,7 @@ CI builds the same DMG on every push — grab it from the
 [Actions artifacts](https://github.com/teomurgi/mac-gliff/actions/workflows/ci.yml).
 The build waits on Apple to enable the developer subscription, so the DMG
 is unsigned for now (ad-hoc signature only) and Gatekeeper asks on the
-first launch of a downloaded copy. No Homebrew formula yet.
+first launch of a downloaded copy — expected to change shortly. No Homebrew formula yet.
 
 On the Hyprland machine, install `gliff-server` from upstream — `omarchy pkg add gliff`
 from the [Omarchy Package Repository](https://github.com/omacom/omarchy-pkgs), or build
@@ -158,9 +158,8 @@ Issues and pull requests welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Credits & license
 
-mac-gliff is a port of [gliff](https://github.com/omacom/gliff) by Kevin McConnell. The
-upstream crates are vendored in-tree with small, mechanical macOS arms, so upstream
-changes keep rebasing cleanly. Without gliff's protocol and design notes this port would
-not exist.
+mac-gliff is a port of [gliff](https://github.com/omacom/gliff) by Kevin McConnell and
+DHH. The shared protocol, transport and CPU-tier crates are vendored in-tree; the server
+side lives upstream. Without gliff's protocol and design notes this port would not exist.
 
 MIT — see [LICENSE](LICENSE). The binaries link OpenH264; see [NOTICE](NOTICE).
