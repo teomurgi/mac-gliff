@@ -1,64 +1,138 @@
+<div align="center">
+
 # mac-gliff
 
-A macOS port of the [gliff](https://github.com/omacom/gliff) remote
-desktop client: VideoToolbox H.264 decode and a Metal compute recombine,
-replacing the Linux client's VA-API + Vulkan GPU tier. The goal is the
-same sharp 4:4:4 text gliff delivers on Linux — hardware decode, no
-pixel copies — between a Mac and a Hyprland machine over ssh.
+**Remote desktop for [Hyprland](https://hyprland.org) — from your Mac.**<br>
+Text stays sharp. All it needs between the two machines is ssh.
 
-Derived from omacom/gliff @ a2edd50 (MIT); the vendored upstream crates
-are kept in place so the port can be wired into the client with the
-smallest possible diff. See `docs/` for the upstream architecture notes
-that still apply.
+[![CI](https://github.com/teomurgi/mac-gliff/actions/workflows/ci.yml/badge.svg)](https://github.com/teomurgi/mac-gliff/actions/workflows/ci.yml)
+[![Ported from](https://img.shields.io/badge/ported%20from-omacom%2Fgliff-7749bd)](https://github.com/omacom/gliff)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-- [x] **macOS decode + compute**: `gliff-mtl::vt` (VideoToolbox session
-  per stream, raw C FFI, hardware by default with a
-  `new_software()` escape for virtual machines) and
-  `gliff-mtl::compute` (Metal compute pipeline, `CVMetalTextureCache`
-  zero-copy input, fast math off). The macOS CI runner decodes the
-  recorded H.264 fixture through VideoToolbox, recombines it through
-  the shader, and matches the CPU reference — the full pipeline, green.
-- [x] **Wire into the client** (`crates/gliff`): a `VideoDecoder::Metal`
-  arm behind `cfg(target_os = "macos")`, `gliff-vk` / `hypr-capture` /
-  `hypr-input` (and the unused `hypr-ipc`, `drm-fourcc`) gated to Linux,
-  and a `Frame::Metal` variant. The client builds and runs on macOS;
-  decode is VT+Metal end to end with the CPU tier as fallback.
-- [x] **Display, zero-copy**: the recombine writes into an IOSurface,
-  and a `gtk::GLArea` video widget binds that same storage with
-  `CGLTexImageIOSurface2D` (the `CVOpenGLTextureCache` plan does not
-  apply — it wants a `CVImageBuffer`, not a bare IOSurface) and draws
-  it through the paintable's layout math, so pointer mapping and zoom
-  are identical across tiers. The `glvideo` example verifies the
-  framebuffer against the decoded pixels: delta 0.
-- [x] **Input**: a positional kVK → evdev table (`kbd.rs`, grounded in
-  HIToolbox's Events.h) translates what GDK reports on macOS, and the
-  active keyboard layout (Text Input Sources) is mapped to its xkb
-  counterpart whose pre-generated keymap text (`scripts/gen-keymaps.sh`,
-  committed under `crates/gliff/keymaps/`) is shipped to the server —
-  no xkb machinery runs on the Mac. Layout changes are picked up
-  mid-session.
-- [ ] Packaging (Homebrew), codesigning.
+mac-gliff is a macOS port of **[gliff](https://github.com/omacom/gliff)** by Kevin
+McConnell: the Linux client's VA-API + Vulkan GPU tier, rebuilt on **VideoToolbox +
+Metal**. The server is untouched — it stays on the Linux machine.
 
-## Layout
+</div>
 
+## Why
+
+Most remote desktops send video with halved colour resolution (4:2:0), which is why
+coloured text — syntax highlighting, diffs, your terminal — arrives smeared. gliff sends
+full-resolution colour (**4:4:4**) by splitting every frame into two H.264 streams
+(AVC444) that ordinary hardware encoders can handle, and stitching them back together on
+the client.
+
+On Linux, that stitch is a Vulkan compute shader over VA-API decoders. mac-gliff rebuilds
+it natively for the Mac:
+
+- **VideoToolbox H.264 decode** — one hardware session per stream; virtual machines fall
+  back to software decode automatically.
+- **Metal compute recombine** — the shader as MSL, fed straight from the decoder
+  through `CVMetalTextureCache`: no pixel copies, no CPU involvement.
+- **Zero-copy display** — the recombine writes into an IOSurface the GTK window binds
+  directly (`CGLTexImageIOSurface2D`). Decoded frame to screen, untouched.
+- **Your keyboard, your layout** — the active macOS layout is detected and mapped to its
+  xkb counterpart; 38 pre-generated keymaps ship in the binary, and layout changes are
+  picked up mid-session.
+- **A CPU tier as fallback** — OpenH264 end to end when no GPU is available; `--video cpu`
+  forces it.
+
+Everything else is gliff, unchanged: one connection per machine in a tabbed window, a
+shared clipboard in both directions (text, images, files), quality that adapts to the
+link, and reconnection when it drops.
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph server["Linux · Hyprland — gliff-server (upstream, unchanged)"]
+        OUT["Hyprland output"] -->|"dmabuf capture"| SPL["Vulkan split shader"]
+        SPL --> ENC["two VA-API H.264 encoders<br/>(AVC444: 4:4:4 as two streams)"]
+    end
+
+    subgraph mac["macOS — mac-gliff (this port)"]
+        VT["VideoToolbox decode<br/>(two sessions)"]
+        MTL["Metal recombine shader"]
+        WIN["GTK window"]
+        VT -->|"zero-copy<br/>CVMetalTexture"| MTL
+        MTL -->|"IOSurface"| WIN
+    end
+
+    ENC -->|"video, over ssh"| VT
+    WIN -.->|"keys · pointer · clipboard"| ENC
 ```
-crates/gliff-mtl       the port: avcc + display (portable), vt + compute (macOS)
-shaders/recombine.metal  the MSL transliteration of gliff-vk's recombine.comp
-crates/gliff           the vendored client, wired to the tiers per OS
-docs/                  upstream architecture and quirks notes
-```
 
-## Build and test
+The protocol runs over `ssh -T host gliff-server --stdio` — no open ports, no accounts,
+no relay. Only coded H.264 crosses the network.
+
+## Requirements
+
+| Side | Needs |
+|---|---|
+| **Your Mac** | [Rust](https://rustup.rs) ≥ 1.92 and the GTK 4 libraries: `brew install pkg-config gtk4 libadwaita` |
+| **Remote machine** | Linux with [Hyprland](https://hyprland.org) running, [gliff](https://github.com/omacom/gliff) installed, and ssh access from the Mac |
+
+## Build
 
 ```sh
-cargo test -p gliff-mtl          # portable core, any platform
-cargo test -p gliff-mtl          # on macOS: also VideoToolbox + Metal,
-                                 # including the shader-vs-reference check
-cargo test -p gliff-mtl -- --ignored   # on a real Mac: the hardware-VT pipeline
-cargo clippy -p gliff-mtl -p gliff --all-targets -- -D warnings
+git clone https://github.com/teomurgi/mac-gliff && cd mac-gliff
+brew install pkg-config gtk4 libadwaita
+bin/build -p gliff                       # the client; the server crates build on Linux
+./target/release/mac-gliff user@host
 ```
 
-CI runs both on ubuntu (portable tests plus the client against GTK) and
-macos-15 (the full tier plus the client). The client needs the GTK4
-development libraries (`brew install pkg-config gtk4 libadwaita` on
-macOS) and Rust ≥ 1.92, the floor of the locked gtk4-rs stack.
+No Homebrew formula yet — symlink `target/release/mac-gliff` onto your `PATH`
+yourself, or run it from the checkout.
+
+On the Hyprland machine, install `gliff-server` from upstream — `omarchy pkg add gliff`
+from the [Omarchy Package Repository](https://github.com/omacom/omarchy-pkgs), or [build
+it from source](https://github.com/omacom/gliff#install) — or build it from this
+checkout; the vendored server crates are unchanged from upstream.
+
+## Use
+
+```sh
+mac-gliff user@host                  # mirror the remote screen that has focus
+mac-gliff --output DP-1 user@host    # mirror a named remote screen
+mac-gliff --headless user@host       # a private remote screen, sized to this window
+mac-gliff --video cpu user@host      # force the software tier
+```
+
+While the pointer is over the picture, keys and window-manager shortcuts go to the remote
+machine; `Shift+Esc` hands them back (`--release-hotkey` changes or disables that). Copy
+on one machine, paste on the other.
+
+## Status
+
+Ported and tested: decode + recombine (VideoToolbox + Metal, output checked against the
+CPU reference), automatic tier selection in the client, zero-copy display (framebuffer
+verified against the decoded pixels), keyboard input for the common layouts, and the
+clipboard (verified live, both directions).
+
+- [ ] Homebrew packaging
+- [ ] Codesigned, notarized builds
+
+Known limits: exotic keyboard layouts fall back to `us`.
+
+## Documentation
+
+- **[docs/architecture.md](docs/architecture.md)** — the design, the crates, and the
+  measurements (upstream; the macOS tier follows the same shape)
+- **[docs/hardware-quirks.md](docs/hardware-quirks.md)** — what each GPU driver and
+  compositor does, and what is tested where
+- **[docs/development.md](docs/development.md)** — building, running on one machine, and
+  the tests
+
+## Contributing
+
+Issues and pull requests welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Credits & license
+
+mac-gliff is a port of [gliff](https://github.com/omacom/gliff) by Kevin McConnell. The
+upstream crates are vendored in-tree with small, mechanical macOS arms, so upstream
+changes keep rebasing cleanly. Without gliff's protocol and design notes this port would
+not exist.
+
+MIT — see [LICENSE](LICENSE). The binaries link OpenH264; see [NOTICE](NOTICE).
