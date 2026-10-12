@@ -85,11 +85,11 @@ bin/build -p gliff                       # the client
 ### As a Mac app
 
 `macos/build-dmg.sh` bundles the client with the whole GTK stack inside
-`mac-gliff.app` (libraries relocated, nothing else to install) and wraps it in a
+`Gliff.app` (libraries relocated, nothing else to install) and wraps it in a
 DMG with an `/Applications` symlink:
 
 ```sh
-macos/build-dmg.sh          # -> dist/mac-gliff-<version>-<arch>.dmg
+macos/build-dmg.sh          # -> dist/gliff-<version>-<arch>.dmg
 ```
 
 CI builds the same DMG on every push — grab it from the

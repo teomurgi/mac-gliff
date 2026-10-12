@@ -44,7 +44,7 @@ jobs:
       - name: Upload DMG
         uses: actions/upload-artifact@v5
         with:
-          name: mac-gliff-dmg
+          name: gliff-dmg
           path: dist/*.dmg
 
   release:

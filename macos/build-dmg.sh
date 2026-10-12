@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build mac-gliff.app and wrap it in a DMG.
+# Build Gliff.app and wrap it in a DMG.
 #
 # The bundle carries the whole brew GTK stack inside Contents/Frameworks
 # (load commands rewritten to @executable_path), so it runs on machines
@@ -21,7 +21,7 @@ VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
 ARCH=$(uname -m)
 BREW=${BREW_PREFIX:-$(brew --prefix)}
 
-APP="mac-gliff.app"
+APP="Gliff.app"
 BUNDLE="dist/$APP"
 FW="$BUNDLE/Contents/Frameworks"
 RES="$BUNDLE/Contents/Resources"
@@ -48,8 +48,8 @@ cat > "$BUNDLE/Contents/Info.plist" <<EOF
 <dict>
     <key>CFBundleExecutable</key>          <string>mac-gliff</string>
     <key>CFBundleIdentifier</key>          <string>io.github.teomurgi.mac-gliff</string>
-    <key>CFBundleName</key>                <string>mac-gliff</string>
-    <key>CFBundleDisplayName</key>         <string>mac-gliff</string>
+    <key>CFBundleName</key>                <string>Gliff</string>
+    <key>CFBundleDisplayName</key>         <string>Gliff</string>
     <key>CFBundlePackageType</key>         <string>APPL</string>
     <key>CFBundleShortVersionString</key>  <string>$VERSION</string>
     <key>CFBundleVersion</key>             <string>$VERSION</string>
@@ -239,9 +239,9 @@ STAGE=$(mktemp -d)
 cp -R "$BUNDLE" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 mkdir -p dist
-hdiutil create -volname mac-gliff -srcfolder "$STAGE" -format UDZO -ov \
-    "dist/mac-gliff-$VERSION-$ARCH.dmg" >/dev/null
+hdiutil create -volname Gliff -srcfolder "$STAGE" -format UDZO -ov \
+    "dist/gliff-$VERSION-$ARCH.dmg" >/dev/null
 rm -rf "$STAGE"
 
 echo
-echo "OK: dist/mac-gliff-$VERSION-$ARCH.dmg ($(du -h "dist/mac-gliff-$VERSION-$ARCH.dmg" | cut -f1))"
+echo "OK: dist/gliff-$VERSION-$ARCH.dmg ($(du -h "dist/gliff-$VERSION-$ARCH.dmg" | cut -f1))"

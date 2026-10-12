@@ -22,7 +22,7 @@ A C++ toolchain is needed for the vendored OpenH264 build in `gliff-sw`
 (nasm speeds it up).
 
 `macos/build-dmg.sh` bundles the built client, with the whole GTK stack,
-into `mac-gliff.app` and a DMG — see the README.
+into `Gliff.app` and a DMG — see the README.
 
 ## Testing
 
