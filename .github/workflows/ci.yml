@@ -59,7 +59,37 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: GTK dev libraries and git-cliff
         run: brew install pkg-config gtk4 libadwaita git-cliff
+      - name: Signing identity
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERT_P12" ]; then echo "no signing certificate; building ad-hoc"; exit 0; fi
+          cert=$(mktemp /tmp/cert.XXXXXX.p12)
+          printf '%s' "$MACOS_CERT_P12" | base64 --decode > "$cert"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import "$cert" -k build.keychain -P "$MACOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/xcrun
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" build.keychain
+          security list-keychains -d user -s build.keychain \
+            $(security list-keychains -d user | tr -d '"')
+          rm -f "$cert"
+      - name: Notary credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then echo "no notary credentials; skipping notarization"; exit 0; fi
+          xcrun notarytool store-credentials mac-gliff-notary \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD"
       - name: DMG
+        env:
+          SIGNING_IDENTITY: ${{ vars.SIGNING_IDENTITY }}
         run: macos/build-dmg.sh
       - name: GitHub release
         env:

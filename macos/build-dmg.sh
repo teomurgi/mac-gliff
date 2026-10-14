@@ -1,10 +1,10 @@
 #!/bin/bash
 # Build Gliff.app and wrap it in a DMG.
 #
-# The bundle carries the whole brew GTK stack inside Contents/Frameworks
-# (load commands rewritten to @executable_path), so it runs on machines
-# without Homebrew. Ad-hoc signed only — no Developer ID, no notarization;
-# Gatekeeper will ask on the first launch of a downloaded copy.
+# With SIGNING_IDENTITY set (a "Developer ID Application: ..." identity and
+# notarytool credentials; see macos/sign-notarize.sh), the bundle and the DMG
+# are signed, notarized and stapled for distribution. Otherwise ad-hoc
+# signed only — Gatekeeper will ask on the first launch of a downloaded copy.
 #
 # Needs on the build machine: rustup (the repo's rust-toolchain.toml
 # selects the compiler), `brew install pkg-config gtk4 libadwaita`, and
@@ -205,7 +205,7 @@ done
 # loads the rewritten libraries (the kernel kills unsigned loads).
 find "$FW" "$RES/lib" "$BUNDLE/Contents/MacOS" -type f \
     \( -name '*.dylib' -o -name '*.so' -o -name '*.bin' \) \
-    -exec codesign --force --sign - {} +
+    -print0 | xargs -0 "$ROOT/macos/sign-notarize.sh" machos
 # --- GTK resources ---------------------------------------------------------
 echo "== resources"
 
@@ -229,10 +229,9 @@ cp -RLL "$BREW/share/icons/hicolor" "$RES/share/icons/" 2>/dev/null || true
 [ -d "$BREW/share/icons/Adwaita" ] && cp -RLL "$BREW/share/icons/Adwaita" "$RES/share/icons/" || true
 cp -RLL "$BREW/share/mime/." "$RES/share/mime/" 2>/dev/null || true
 
-# --- sign + dmg ------------------------------------------------------------
+# --- sign + notarize + dmg --------------------------------------------------
 echo "== sign"
-codesign --force --sign - "$BUNDLE"
-codesign --verify --strict "$BUNDLE"
+"$ROOT/macos/sign-notarize.sh" app "$BUNDLE"
 
 echo "== dmg"
 STAGE=$(mktemp -d)
@@ -241,6 +240,7 @@ ln -s /Applications "$STAGE/Applications"
 mkdir -p dist
 hdiutil create -volname Gliff -srcfolder "$STAGE" -format UDZO -ov \
     "dist/gliff-$VERSION-$ARCH.dmg" >/dev/null
+"$ROOT/macos/sign-notarize.sh" dmg "dist/gliff-$VERSION-$ARCH.dmg"
 rm -rf "$STAGE"
 
 echo
