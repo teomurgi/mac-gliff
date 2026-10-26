@@ -23,6 +23,7 @@ libadwaita.workspace = true
 gliff-proto.workspace = true
 gliff-transport.workspace = true
 gliff-sw.workspace = true
+gliff-audio = { workspace = true, features = ["player"] }
 bytes.workspace = true
 serde.workspace = true
 toml = "1"
