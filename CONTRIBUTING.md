@@ -41,6 +41,11 @@ cargo run -p gliff --example glvideo   # decodes the fixture through the
                                        # client's widget; asserts delta 0
 ```
 
+Off a Mac (e.g. Linux), `scripts/cross-check.sh` runs fmt, clippy for
+`aarch64-apple-darwin` (type-check only, nothing links) and the portable crates'
+tests. It needs `rustup target add aarch64-apple-darwin` and is no substitute
+for `scripts/check.sh` on a Mac.
+
 ## Layout
 
 | Path | What it is |
