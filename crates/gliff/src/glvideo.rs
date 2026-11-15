@@ -280,9 +280,14 @@ impl GlVideo {
             frame.width as i32 * frame.zoom as i32,
             frame.height as i32 * frame.zoom as i32,
         );
-        // The paintable path keeps an integer factor pixel-exact with
-        // nearest sampling and shrinks with linear; mirror it.
-        let filter = if w >= tex_w { GL_NEAREST } else { GL_LINEAR };
+        // Nearest keeps a whole-multiple enlargement pixel-exact; a
+        // fractional fit or a shrink is linear, as the paintable draws it.
+        let whole = |dst: i32, tex: i32| dst >= tex && dst.checked_rem(tex) == Some(0);
+        let filter = if whole(w, tex_w) && whole(h, tex_h) {
+            GL_NEAREST
+        } else {
+            GL_LINEAR
+        };
         // SAFETY: the texture object exists and is bound to the
         // rectangle target; the IOSurface belongs to the live frame and
         // holds tex_w*tex_h BGRA pixels; the context is current.

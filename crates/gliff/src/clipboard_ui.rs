@@ -56,8 +56,64 @@ thread_local! {
     static MIRROR: RefCell<Option<gdk::ContentProvider>> = const { RefCell::new(None) };
 }
 
+/// Only called with a live clipboard, so unit tests never reach the
+/// native pasteboard check.
 fn sensitive_selection(mimes: &[String]) -> bool {
+    #[cfg(target_os = "macos")]
+    if concealed_pasteboard() {
+        return true;
+    }
     mimes.iter().any(|m| m == "x-kde-passwordManagerHint")
+}
+
+/// Whether the general pasteboard holds `org.nspasteboard.ConcealedType`,
+/// the macOS password managers' marker. GTK reports that type only as
+/// `application/octet-stream`, so it is asked of the pasteboard directly.
+#[cfg(target_os = "macos")]
+fn concealed_pasteboard() -> bool {
+    use std::ffi::{c_char, c_void};
+    use std::mem::transmute;
+    type Id = *mut c_void;
+    type Sel = *const c_void;
+    // Declared as in cursor.rs, as a second signature would clash; each
+    // call casts it to its method's own.
+    type Msg = unsafe extern "C" fn(Id, Sel);
+    #[link(name = "objc", kind = "dylib")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const c_char) -> Id;
+        fn sel_registerName(name: *const c_char) -> Sel;
+        fn objc_msgSend(receiver: Id, sel: Sel);
+        fn objc_autoreleasePoolPush() -> *mut c_void;
+        fn objc_autoreleasePoolPop(pool: *mut c_void);
+    }
+    // SAFETY: objc_msgSend is called through a pointer of each method's
+    // exact signature (+generalPasteboard, -types, +stringWithUTF8String:
+    // -> id; -containsObject: -> BOOL); a nil receiver answers nil or NO.
+    // The objects autoreleased here are freed by the pool popped here.
+    unsafe {
+        let send_id = transmute::<Msg, unsafe extern "C" fn(Id, Sel) -> Id>(objc_msgSend);
+        let send_cstr =
+            transmute::<Msg, unsafe extern "C" fn(Id, Sel, *const c_char) -> Id>(objc_msgSend);
+        let send_bool = transmute::<Msg, unsafe extern "C" fn(Id, Sel, Id) -> bool>(objc_msgSend);
+        let pool = objc_autoreleasePoolPush();
+        let pasteboard = send_id(
+            objc_getClass(c"NSPasteboard".as_ptr()),
+            sel_registerName(c"generalPasteboard".as_ptr()),
+        );
+        let types = send_id(pasteboard, sel_registerName(c"types".as_ptr()));
+        let concealed = send_cstr(
+            objc_getClass(c"NSString".as_ptr()),
+            sel_registerName(c"stringWithUTF8String:".as_ptr()),
+            c"org.nspasteboard.ConcealedType".as_ptr(),
+        );
+        let found = send_bool(
+            types,
+            sel_registerName(c"containsObject:".as_ptr()),
+            concealed,
+        );
+        objc_autoreleasePoolPop(pool);
+        found
+    }
 }
 
 fn holds_remote_offer(cb: &gdk::Clipboard) -> bool {

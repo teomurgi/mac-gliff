@@ -158,6 +158,10 @@ fn main() {
         window.set_title(Some("gliff GlVideo smoke"));
         let area = video.widget().clone();
         area.set_size_request(64, 64);
+        // Keep the requested size when a window manager resizes the
+        // window, so the fit stays the integer one `check` assumes.
+        area.set_halign(gtk::Align::Center);
+        area.set_valign(gtk::Align::Center);
         window.set_child(Some(&area));
         let area = area
             .downcast_ref::<gtk::GLArea>()
