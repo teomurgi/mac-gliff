@@ -136,14 +136,13 @@ fn compile(kind: u32, src: &CStr) -> u32 {
 /// (width, height) on a display of `scale` device pixels per logical one.
 pub(crate) fn dst_rect(
     view: (u32, u32),
-    scale: i32,
+    scale: f64,
     alloc: (f64, f64),
 ) -> Option<(i32, i32, i32, i32)> {
-    let scale = scale.max(1);
     let l = paintable::layout(view, scale, alloc.0, alloc.1)?;
-    let fb_h = alloc.1 * scale as f64;
-    let (x, y) = (l.x * scale as f64, l.y * scale as f64);
-    let (w, h) = (l.width * scale as f64, l.height * scale as f64);
+    let fb_h = alloc.1 * scale;
+    let (x, y) = (l.x * scale, l.y * scale);
+    let (w, h) = (l.width * scale, l.height * scale);
     // The layout counts from the top; GL from the bottom. The texture
     // is drawn scaled into this rect whatever its own size, exactly as
     // the paintable scales its texture node into the same rect.
@@ -164,7 +163,7 @@ pub struct GlVideo {
     texture: Cell<u32>,
     frame: RefCell<Option<Rc<BgraFrame>>>,
     view: Cell<(u32, u32)>,
-    scale: Cell<i32>,
+    scale: Cell<f64>,
 }
 
 impl GlVideo {
@@ -177,7 +176,7 @@ impl GlVideo {
             texture: Cell::new(0),
             frame: RefCell::new(None),
             view: Cell::new((0, 0)),
-            scale: Cell::new(1),
+            scale: Cell::new(1.0),
         });
         video.area.connect_render(glib::clone!(
             #[strong]
@@ -197,7 +196,7 @@ impl GlVideo {
 
     /// Show `frame` inside a `view`-sized area (device pixels) on a
     /// display of `scale_factor`.
-    pub fn set_frame(&self, frame: Rc<BgraFrame>, scale_factor: i32, view: (u32, u32)) {
+    pub fn set_frame(&self, frame: Rc<BgraFrame>, scale_factor: f64, view: (u32, u32)) {
         *self.frame.borrow_mut() = Some(frame);
         self.scale.set(scale_factor);
         self.view.set(view);
@@ -205,7 +204,7 @@ impl GlVideo {
     }
 
     /// Follow a display scale change without waiting for a new frame.
-    pub fn set_scale(&self, scale_factor: i32) {
+    pub fn set_scale(&self, scale_factor: f64) {
         self.scale.set(scale_factor);
         self.area.queue_render();
     }
@@ -255,7 +254,7 @@ impl GlVideo {
 
     fn render(&self) {
         self.ensure_gl();
-        let scale = self.scale.get().max(1);
+        let scale = self.scale.get();
         let (alloc_w, alloc_h) = (self.area.width() as f64, self.area.height() as f64);
         // The framebuffer's real size, as GTK left the viewport: it is
         // the allocation in device pixels, but asking beats guessing.
@@ -327,7 +326,7 @@ mod tests {
     /// An exact fit: the view fills the widget and the frame is 1:1.
     #[test]
     fn full_fit_is_one_to_one() {
-        let r = dst_rect((64, 64), 2, (32.0, 32.0)).unwrap();
+        let r = dst_rect((64, 64), 2.0, (32.0, 32.0)).unwrap();
         assert_eq!(r, (0, 0, 64, 64));
     }
 
@@ -335,9 +334,9 @@ mod tests {
     /// pixels; the rect keeps GL's bottom-left origin.
     #[test]
     fn letterbox_centres() {
-        let r = dst_rect((64, 64), 1, (96.0, 64.0)).unwrap();
+        let r = dst_rect((64, 64), 1.0, (96.0, 64.0)).unwrap();
         assert_eq!(r, (16, 0, 64, 64));
-        let r = dst_rect((64, 64), 1, (64.0, 96.0)).unwrap();
+        let r = dst_rect((64, 64), 1.0, (64.0, 96.0)).unwrap();
         assert_eq!(r, (0, 16, 64, 64));
     }
 
@@ -346,9 +345,9 @@ mod tests {
     /// paintable would use.
     #[test]
     fn the_rect_follows_the_layout_not_the_texture() {
-        let r = dst_rect((32, 32), 1, (32.0, 32.0)).unwrap();
+        let r = dst_rect((32, 32), 1.0, (32.0, 32.0)).unwrap();
         assert_eq!(r, (0, 0, 32, 32));
-        let r = dst_rect((32, 32), 2, (64.0, 64.0)).unwrap();
+        let r = dst_rect((32, 32), 2.0, (64.0, 64.0)).unwrap();
         assert_eq!(r, (0, 0, 128, 128));
     }
 }

@@ -74,7 +74,7 @@ const GL_PACK_ALIGNMENT: u32 = 0x0D05;
 /// worst channel delta.
 #[cfg(target_os = "macos")]
 fn check(area: &gtk::GLArea, frame: &gliff_mtl::compute::BgraFrame) -> i32 {
-    let scale = area.scale_factor().max(1);
+    let scale = area.scale_factor().max(1) as f64;
     let (w, h) = (
         frame.width as usize * frame.zoom as usize,
         frame.height as usize * frame.zoom as usize,
@@ -97,8 +97,8 @@ fn check(area: &gtk::GLArea, frame: &gliff_mtl::compute::BgraFrame) -> i32 {
         glGetIntegerv(GL_VIEWPORT, viewport.as_mut_ptr());
     }
     (fb_w, fb_h) = (viewport[2].max(1) as f64, viewport[3].max(1) as f64);
-    let logical_w = area.width() as f64 * scale as f64;
-    let logical_h = area.height() as f64 * scale as f64;
+    let logical_w = area.width() as f64 * scale;
+    let logical_h = area.height() as f64 * scale;
     let map = |v: f64, from: f64, to: f64| (v * to / from).round() as i32;
     let (rx, ry) = (
         map(dx as f64, logical_w, fb_w),
@@ -204,7 +204,7 @@ fn main() {
                     Ok(Some(frame)) => {
                         let frame = Rc::new(frame);
                         *last.borrow_mut() = Some(frame.clone());
-                        video.set_frame(frame, area.scale_factor(), (64, 64));
+                        video.set_frame(frame, area.scale_factor() as f64, (64, 64));
                         frame_no.set(i + 1);
                     }
                     Ok(None) => eprintln!("frame {i}: no picture"),

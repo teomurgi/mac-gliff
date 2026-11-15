@@ -198,4 +198,8 @@ mac-gliff is a port of [gliff](https://github.com/omacom/gliff) by Kevin McConne
 DHH. The shared protocol, transport and CPU-tier crates are vendored in-tree; the server
 side lives upstream. Without gliff's protocol and design notes this port would not exist.
 
+The client-side crates track upstream gliff 0.4.3
+([`9d93732`](https://github.com/omacom/gliff/commit/9d93732)); the protocol version matches
+that release, so pair it with a `gliff-server` of the same protocol.
+
 MIT — see [LICENSE](LICENSE). The binaries link OpenH264; see [NOTICE](NOTICE).
