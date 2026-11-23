@@ -40,6 +40,9 @@ pub struct Config {
     /// entry with `remember` set is used without asking again.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub display: BTreeMap<String, DisplaySetting>,
+    /// The header's sound button is off: no tab plays its machine's sound.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
 }
 
 impl Config {

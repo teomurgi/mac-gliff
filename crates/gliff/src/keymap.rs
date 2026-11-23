@@ -21,7 +21,10 @@ pub type Keymap = watch::Receiver<String>;
 pub const FIRST_KEYMAP_WAIT: Duration = Duration::from_secs(1);
 
 pub fn watch() -> Keymap {
+    #[cfg(target_os = "macos")]
     let (tx, rx) = watch::channel(String::new());
+    #[cfg(not(target_os = "macos"))]
+    let (_tx, rx) = watch::channel(String::new());
     #[cfg(target_os = "macos")]
     {
         use std::cell::Cell;
