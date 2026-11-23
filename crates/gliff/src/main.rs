@@ -3052,17 +3052,20 @@ fn request_resize(ui: &App) {
     );
 }
 
-/// GTK button number to evdev `BTN_*`. GDK numbers left, middle and right
-/// 1-3 and the further buttons from `SIDE` on: 8 on X11/Wayland, after the
-/// old scroll buttons 4-7, and 4 on macOS. `SIDE` is `BTN_SIDE` (back),
-/// the next `BTN_EXTRA` (forward), and so on.
+/// GTK button number to evdev `BTN_*`. GTK's macOS backend numbers the
+/// side buttons 4 and 5, while X11/Wayland numbers back and forward 8 and
+/// 9 after the old scroll buttons 4-7.
 fn evdev_button(n: u32) -> u32 {
-    const SIDE: u32 = if cfg!(target_os = "macos") { 4 } else { 8 };
     match n {
         1 => 0x110, // BTN_LEFT
         2 => 0x112, // BTN_MIDDLE
         3 => 0x111, // BTN_RIGHT
-        SIDE.. => 0x113 + n - SIDE,
+        #[cfg(target_os = "macos")]
+        4.. => 0x113 + n - 4, // BTN_SIDE, BTN_EXTRA, ...
+        #[cfg(not(target_os = "macos"))]
+        8 => 0x116, // BTN_BACK
+        #[cfg(not(target_os = "macos"))]
+        9 => 0x115, // BTN_FORWARD
         _ => 0x110,
     }
 }
@@ -3679,7 +3682,10 @@ mod trackpad_tests {
         let codes: Vec<u32> = (1..=11).map(super::evdev_button).collect();
         assert_eq!(&codes[..3], [0x110, 0x112, 0x111]);
         #[cfg(not(target_os = "macos"))]
-        assert_eq!(&codes[7..], [0x113, 0x114, 0x115, 0x116]);
+        {
+            assert_eq!(&codes[7..9], [0x116, 0x115]);
+            assert_eq!(&codes[9..], [0x110, 0x110]);
+        }
         #[cfg(target_os = "macos")]
         assert_eq!(&codes[3..7], [0x113, 0x114, 0x115, 0x116]);
     }
