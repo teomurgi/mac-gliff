@@ -1,22 +1,29 @@
 # Changelog
 
 Derived from [conventional commits](https://www.conventionalcommits.org).
+## v0.4.0 (2026-11-23)
+### Documentation
+- Tighten the changelog sections since v0.2.0 ([9e7d0bf](https://github.com/teomurgi/mac-gliff/commit/9e7d0bf0bbb84af721f23c84e01b7eee0e752c0b))
+- Lead the README with the core selling points ([1c9d388](https://github.com/teomurgi/mac-gliff/commit/1c9d38886904f990bf4f55836e21f7a65b133fa6))
+- Install from GitHub Releases as a normal Mac app ([f37be41](https://github.com/teomurgi/mac-gliff/commit/f37be41d5e04858fb0b1c99aea6d8ed3f11545a6))
+
+### Features
+- Play the remote machine's sound (#3) ([dfa16b7](https://github.com/teomurgi/mac-gliff/commit/dfa16b7759b5de4de5830c7d26e194c1e41d8dbd))
+- Sync client with upstream gliff 0.4.3 (#4) ([f29f258](https://github.com/teomurgi/mac-gliff/commit/f29f2584a05e07f1afff602bec60ccce6dca6f83))
+
 ## v0.3.0 (2026-10-17)
-
-Your remote screen, your call. Connecting from a tab or the address bar now asks — mirror the remote display, or open a private headless screen fitted to this window — and a checkbox remembers the choice per machine so it never asks again. Right-click a tab to change the mapping any time (or bring the question back); a running session reconnects under the new mapping on the spot, and `--headless`/`--output` still lock it down outright from the command line ([f69497c](https://github.com/teomurgi/mac-gliff/commit/f69497c5e143d8b5a0e887948028d34f1afa9e28), [#2](https://github.com/teomurgi/mac-gliff/pull/2))
-
-Everything else that rode in on #2:
-
-- **One cursor, not two.** Headless sessions painted the remote cursor *and* kept the local arrow on top. The local pointer now hides itself over headless video, rebalanced on pointer leave, session switch and disconnect.
-- **Right-click on a tab finally does something.** It opens the tab's own menu — screen mapping and ask-before-connecting — instead of the window menu that used to steal the click.
-- **The command line outranks memory.** `--headless` and `--output` now beat a remembered mapping at startup instead of silently losing to it.
-- **No more broken-image icons.** Stop, forget and stats draw from GTK's builtin set — the only icon theme that actually ships with the app.
-- **Leaner CI.** The DMG builds only for releases, and the commit lint skips merge commits.
+### Features
+- Ask how to map the remote screen; hide local pointer on headless (#2) ([f69497c](https://github.com/teomurgi/mac-gliff/commit/f69497c5e143d8b5a0e887948028d34f1afa9e28))
 
 ## v0.2.1 (2026-10-17)
+### Documentation
+- The release dmg is Developer ID signed and notarized ([24c5f86](https://github.com/teomurgi/mac-gliff/commit/24c5f868a04395223733d9bac19ad1353281bc6d))
+- Lead the README with a live-session screenshot ([d19a560](https://github.com/teomurgi/mac-gliff/commit/d19a5606a77676f72675e3278a81ea8ad13028c1))
+- Point the README screenshot at .github/assets ([da5f1a9](https://github.com/teomurgi/mac-gliff/commit/da5f1a9214a0d559203f955bfd2370b5e16633f1))
+- Swap in the dusk-cityscape desktop screenshot ([542da12](https://github.com/teomurgi/mac-gliff/commit/542da1205c655fb6d8d4e83a6edcb5b8a1ade8dc))
 
-- **The U key works.** `kVK_ANSI_U` was missing from the keycode table, so every U press died on the client before reaching the remote. Mapped, and pinned by a test ([73ad3cf](https://github.com/teomurgi/mac-gliff/commit/73ad3cf48a94f3a541c0151fbb0af287d6cf4b8a))
-- **A sharper storefront.** The README leads with a live-session screenshot over a dusk cityscape, served from `.github/assets`, and says plainly that the release DMG is Developer ID signed and notarized ([24c5f86](https://github.com/teomurgi/mac-gliff/commit/24c5f868a04395223733d9bac19ad1353281bc6d), [d19a560](https://github.com/teomurgi/mac-gliff/commit/d19a5606a77676f72675e3278a81ea8ad13028c1), [da5f1a9](https://github.com/teomurgi/mac-gliff/commit/da5f1a9214a0d559203f955bfd2370b5e16633f1), [542da12](https://github.com/teomurgi/mac-gliff/commit/542da1205c655fb6d8d4e83a6edcb5b8a1ade8dc))
+### Fixes
+- Map the U key ([73ad3cf](https://github.com/teomurgi/mac-gliff/commit/73ad3cf48a94f3a541c0151fbb0af287d6cf4b8a))
 
 ## v0.2.0 (2026-10-17)
 ### Build

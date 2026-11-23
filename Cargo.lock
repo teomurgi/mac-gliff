@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "gliff"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "gliff-audio"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "gliff-mtl"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "foreign-types",
  "gliff-proto",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "gliff-proto"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "minicbor",
  "proptest",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "gliff-sw"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "gliff-proto",
  "openh264",
@@ -737,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "gliff-transport"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bytes",
  "gliff-proto",
