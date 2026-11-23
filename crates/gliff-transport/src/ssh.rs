@@ -33,10 +33,27 @@ pub struct SshStream {
     pub stdout: ChildStdout,
 }
 
-/// Spawn ssh. Compression is off (video is already compressed) and the socket
-/// asks for low-latency queuing. stderr is inherited so server logs reach the
+/// Spawn ssh. Compression is off (video is already compressed), the socket
+/// asks for low-latency queuing, and unknown host keys are accepted unless
+/// ssh config says otherwise. stderr is inherited so server logs reach the
 /// client's terminal.
 pub fn spawn_ssh(target: &SshTarget) -> std::io::Result<SshStream> {
+    let mut cmd = ssh_command(target);
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::inherit());
+    cmd.kill_on_drop(true);
+    let mut child = cmd.spawn()?;
+    let stdin = child.stdin.take().expect("piped stdin");
+    let stdout = child.stdout.take().expect("piped stdout");
+    Ok(SshStream {
+        child,
+        stdin,
+        stdout,
+    })
+}
+
+fn ssh_command(target: &SshTarget) -> Command {
     let mut cmd = Command::new("ssh");
     // ssh resolves ProxyCommand helpers through the child's PATH. A GUI
     // launch inherits launchd's minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin),
@@ -59,21 +76,53 @@ pub fn spawn_ssh(target: &SshTarget) -> std::io::Result<SshStream> {
         .arg("Compression=no")
         .arg("-o")
         .arg("IPQoS=lowdelay")
-        .args(&target.ssh_args)
+        .args(&target.ssh_args);
+    // No terminal to answer the host-key prompt: trust a host on first
+    // connect, as typing "yes" would. A changed key still fails. Only when
+    // the user's ssh config leaves the default, since -o would override it.
+    if host_key_checking_is_default(target) {
+        cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
+    }
+    cmd.arg("--")
         .arg(&target.host)
         .arg(&target.server_bin)
         .arg("--stdio")
         .args(&target.server_args);
-    cmd.stdin(std::process::Stdio::piped());
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::inherit());
-    cmd.kill_on_drop(true);
-    let mut child = cmd.spawn()?;
-    let stdin = child.stdin.take().expect("piped stdin");
-    let stdout = child.stdout.take().expect("piped stdout");
-    Ok(SshStream {
-        child,
-        stdin,
-        stdout,
-    })
+    cmd
+}
+
+/// Whether ssh's effective StrictHostKeyChecking for this host is the default
+/// `ask`, i.e. neither ssh config nor ssh_args set it.
+fn host_key_checking_is_default(target: &SshTarget) -> bool {
+    let Ok(out) = std::process::Command::new("ssh")
+        .arg("-G")
+        .args(&target.ssh_args)
+        .arg("--")
+        .arg(&target.host)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|l| l == "stricthostkeychecking ask")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn host_cannot_supply_ssh_options() {
+        let target = SshTarget::new("-oProxyCommand=touch /tmp/unwanted");
+        let cmd = ssh_command(&target);
+        let args: Vec<_> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_str().unwrap())
+            .collect();
+        let host = args.iter().position(|a| *a == target.host).unwrap();
+        assert_eq!(args[host - 1], "--");
+    }
 }
