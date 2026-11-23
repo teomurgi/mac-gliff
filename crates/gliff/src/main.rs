@@ -14,6 +14,8 @@ mod glvideo;
 #[cfg(target_os = "macos")]
 mod kbd;
 mod keymap;
+#[cfg(target_os = "macos")]
+mod mac_shortcuts;
 mod net;
 mod paintable;
 mod recent;
@@ -82,10 +84,9 @@ struct Cli {
     release_hotkey: String,
     /// Chord that opens the remote's launcher while the keyboard is
     /// captured, translated to super+space on the remote. On macOS this
-    /// bridges the chords the system keeps from apps: Spotlight serves
-    /// ⌘Space itself, and GTK's macOS backend drops ⌥Space (its NBSP
-    /// character never becomes a key event) — ⌃Space arrives and stands
-    /// in. `none` disables; the forms are as for `--release-hotkey`.
+    /// gives you an alternative to Command+Space when system shortcut
+    /// capture is off. `none` disables it; the forms are as for
+    /// `--release-hotkey`.
     #[arg(long, default_value_t = default_launcher_hotkey())]
     launcher_hotkey: String,
     /// Video pipeline: `gpu` (Vulkan compute + VA-API, falling back to the
@@ -165,6 +166,11 @@ struct App {
     view_scale: Cell<f64>,
     /// Plays the shown machine's sound while active.
     sound_btn: gtk::ToggleButton,
+    #[cfg(target_os = "macos")]
+    system_shortcuts_btn: gtk::ToggleButton,
+    /// Whether the WindowServer has applied shortcut capture.
+    #[cfg(target_os = "macos")]
+    system_shortcuts_captured: Cell<bool>,
     /// Evdev codes currently held on the remote, so they can all be released
     /// when the keyboard is handed back to the local compositor.
     pressed_keys: RefCell<BTreeSet<u32>>,
@@ -443,6 +449,17 @@ fn build_ui(app: &adw::Application, cli: &Cli) {
     header.pack_end(&fullscreen_btn);
     header.pack_end(&stats_btn);
     header.pack_end(&sound_btn);
+    #[cfg(target_os = "macos")]
+    let system_shortcuts_btn = {
+        let button = gtk::ToggleButton::builder()
+            .label("Capture system shortcuts")
+            .tooltip_text("Send macOS shortcuts such as Command+Space to the remote")
+            .focus_on_click(false)
+            .sensitive(false)
+            .build();
+        header.pack_end(&button);
+        button
+    };
 
     let stats = gtk::Label::builder()
         .halign(gtk::Align::Start)
@@ -552,6 +569,10 @@ fn build_ui(app: &adw::Application, cli: &Cli) {
         view_size: Cell::new((0, 0)),
         view_scale: Cell::new(1.0),
         sound_btn: sound_btn.clone(),
+        #[cfg(target_os = "macos")]
+        system_shortcuts_btn,
+        #[cfg(target_os = "macos")]
+        system_shortcuts_captured: Cell::new(false),
         pressed_keys: RefCell::new(BTreeSet::new()),
         released: Cell::new(false),
         pointer_over_video: Cell::new(false),
@@ -570,6 +591,8 @@ fn build_ui(app: &adw::Application, cli: &Cli) {
         tracing::warn!(error = %e, "invalid --launcher-hotkey; no launcher translation");
         Hotkey::None
     });
+    #[cfg(target_os = "macos")]
+    install_system_shortcuts(&ui, &hotkey);
     install_input_handlers(&ui, &video, &window, hotkey, launcher);
     #[cfg(target_os = "macos")]
     install_local_shortcuts(&ui);
@@ -1385,6 +1408,8 @@ fn show_session(ui: &Rc<App>, s: &Rc<Session>) {
     if !is_active(ui, s) {
         release_pressed_keys(ui);
         let previous = ui.active.replace(Some(s.clone()));
+        #[cfg(target_os = "macos")]
+        sync_system_shortcut_capture(ui);
         move_local_offer(
             previous.as_ref(),
             ui.cli.no_clipboard,
@@ -1429,6 +1454,8 @@ fn show_session(ui: &Rc<App>, s: &Rc<Session>) {
 fn show_nothing(ui: &Rc<App>) {
     release_pressed_keys(ui);
     let previous = ui.active.take();
+    #[cfg(target_os = "macos")]
+    sync_system_shortcut_capture(ui);
     revoke_local_offer(previous.as_ref(), ui.cli.no_clipboard);
     ui.window.set_title(Some("Gliff"));
     show_status(ui, "Not connected");
@@ -1586,7 +1613,12 @@ fn set_stats(ui: &App, s: &Rc<Session>, text: &str) {
 
 /// Go back to a black screen with no stream geometry.
 fn show_disconnected(ui: &Rc<App>, s: &Rc<Session>) {
-    if s.connected.replace(false) {
+    let was_connected = s.connected.replace(false);
+    #[cfg(target_os = "macos")]
+    if is_active(ui, s) {
+        sync_system_shortcut_capture(ui);
+    }
+    if was_connected {
         refresh_tabs(ui);
     }
     // The shown session's clipboard proxy holds unreachable content
@@ -1840,6 +1872,10 @@ fn poll_status(ui: Rc<App>, s: Rc<Session>, rx: Receiver<Status>, generation: u6
                     s.retries.set(0);
                     s.gave_up.set(false);
                     if !s.connected.replace(true) {
+                        #[cfg(target_os = "macos")]
+                        if is_active(&ui, &s) {
+                            sync_system_shortcut_capture(&ui);
+                        }
                         refresh_tabs(&ui);
                     }
                     set_status(&ui, &s, "");
@@ -2127,6 +2163,18 @@ const CHORD_MODS: gdk::ModifierType = gdk::ModifierType::CONTROL_MASK
     .union(gdk::ModifierType::SHIFT_MASK)
     .union(gdk::ModifierType::SUPER_MASK);
 
+fn chord_modifiers(state: gdk::ModifierType) -> gdk::ModifierType {
+    // GTK's macOS backend reports Command as Meta. The user-facing chord
+    // syntax calls the same physical modifier Super.
+    #[cfg(target_os = "macos")]
+    let state = if state.contains(gdk::ModifierType::META_MASK) {
+        state | gdk::ModifierType::SUPER_MASK
+    } else {
+        state
+    };
+    state & CHORD_MODS
+}
+
 impl Hotkey {
     fn parse(spec: &str) -> Result<Self, String> {
         let s = spec.trim();
@@ -2175,7 +2223,7 @@ impl Hotkey {
             Self::None => false,
             Self::Chord { mods, keyval: k } => {
                 (same_key(keyval, *k) || unshifted.is_some_and(|base| same_key(base, *k)))
-                    && (state & CHORD_MODS) == *mods
+                    && chord_modifiers(state) == *mods
             }
             Self::DoubleTap { keyval: k, within } => {
                 (same_key(keyval, *k) || unshifted.is_some_and(|base| same_key(base, *k)))
@@ -2201,7 +2249,7 @@ impl Hotkey {
         match self {
             Self::None => false,
             Self::Chord { mods, keyval: k } => {
-                (state & CHORD_MODS) == *mods && keyval_to_evdev(*k) == Some(code)
+                chord_modifiers(state) == *mods && keyval_to_evdev(*k) == Some(code)
             }
             Self::DoubleTap { keyval: k, within } => {
                 keyval_to_evdev(*k) == Some(code) && double_tap(*within, last_tap)
@@ -2401,6 +2449,91 @@ fn release_capture(ui: &Rc<App>, window: &adw::ApplicationWindow) {
     show_hint(ui, "Shortcuts released — click the screen to capture again");
 }
 
+#[cfg(target_os = "macos")]
+fn install_system_shortcuts(ui: &Rc<App>, release_hotkey: &Hotkey) {
+    let hint = match release_hotkey {
+        Hotkey::None => "System shortcuts captured".into(),
+        hotkey => format!(
+            "System shortcuts captured. Press {} to release",
+            hotkey.describe()
+        ),
+    };
+    let weak = Rc::downgrade(ui);
+    ui.system_shortcuts_btn.connect_toggled(move |button| {
+        let Some(ui) = weak.upgrade() else { return };
+        if button.is_active() {
+            ui.released.set(false);
+            ui.video.grab_focus();
+        }
+        sync_system_shortcut_capture(&ui);
+        if button.is_active() && ui.system_shortcuts_captured.get() {
+            show_hint(&ui, &hint);
+        }
+    });
+    let weak = Rc::downgrade(ui);
+    let sync = move |_: &adw::ApplicationWindow| {
+        if let Some(ui) = weak.upgrade() {
+            sync_system_shortcut_capture(&ui);
+        }
+    };
+    ui.window.connect_focus_widget_notify(sync.clone());
+    ui.window.connect_is_active_notify(sync);
+    let weak = Rc::downgrade(ui);
+    ui.window.connect_unmap(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            set_system_shortcut_capture(&ui, false);
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn sync_system_shortcut_capture(ui: &Rc<App>) {
+    let button = &ui.system_shortcuts_btn;
+    let connected = active(ui).is_some_and(|session| session.connected.get());
+    let focused = gtk::prelude::GtkWindowExt::focus(&ui.window)
+        .is_some_and(|focus| focus == ui.video || focus.is_ancestor(&ui.video));
+    let capture = button.is_active()
+        && connected
+        && focused
+        && ui.window.is_active()
+        && ui.window.is_mapped()
+        && !ui.released.get();
+    set_system_shortcut_capture(ui, capture);
+    button.set_sensitive(connected || button.is_active());
+    let tooltip = if capture && ui.system_shortcuts_captured.get() {
+        "System shortcuts are captured. Click to turn capture off."
+    } else if ui.system_shortcuts_captured.get() {
+        "Could not restore macOS system shortcuts"
+    } else if button.is_active() {
+        "System shortcut capture is enabled. Focus the remote screen to resume."
+    } else {
+        "Send macOS shortcuts such as Command+Space to the remote"
+    };
+    button.set_tooltip_text(Some(tooltip));
+}
+
+#[cfg(target_os = "macos")]
+fn set_system_shortcut_capture(ui: &Rc<App>, capture: bool) {
+    if ui.system_shortcuts_captured.get() == capture {
+        return;
+    }
+    if !capture {
+        release_pressed_keys(ui);
+    }
+    match mac_shortcuts::set_captured(capture) {
+        Ok(()) => ui.system_shortcuts_captured.set(capture),
+        Err(error) => {
+            tracing::warn!(%error, capture, "could not change macOS system shortcut capture");
+            if capture {
+                ui.system_shortcuts_btn.set_active(false);
+                show_hint(ui, "System shortcut capture is unavailable on this Mac");
+            } else {
+                show_hint(ui, "Could not restore macOS system shortcuts");
+            }
+        }
+    }
+}
+
 /// Release every key held on the remote. Once the video loses focus their
 /// local release events never reach us, so the remote would keep (say) Shift
 /// down until the next connection.
@@ -2492,7 +2625,7 @@ fn finish_launcher(ui: &App, launcher: &Hotkey, armed: &Cell<bool>, state: gdk::
     forward_key(ui, KEY_SPACE, false);
     forward_key(ui, KEY_LEFTMETA, false);
     if let Hotkey::Chord { mods, .. } = launcher {
-        for code in chord_mod_codes(state & *mods) {
+        for code in chord_mod_codes(chord_modifiers(state) & *mods) {
             forward_key(ui, code, true);
         }
     }
@@ -2821,6 +2954,7 @@ fn install_input_handlers(
     // While the video has focus, route system shortcuts (Super, Alt-Tab, ...)
     // to the remote session instead of the local compositor.
     // The compositor answers asynchronously, and may refuse.
+    #[cfg(not(target_os = "macos"))]
     window.connect_realize(|window| {
         if let Some(toplevel) = window.surface().and_downcast::<gdk::Toplevel>() {
             toplevel.connect_shortcuts_inhibited_notify(|t| {
@@ -2833,6 +2967,7 @@ fn install_input_handlers(
     });
     let focus = gtk::EventControllerFocus::new();
     {
+        #[cfg(not(target_os = "macos"))]
         let window = window.clone();
         let ui = ui.clone();
         let mut parts = Vec::new();
@@ -2842,10 +2977,16 @@ fn install_input_handlers(
         if !matches!(launcher, Hotkey::None) {
             parts.push(format!("{} opens the remote launcher", launcher.describe()));
         }
-        let hint =
-            (!parts.is_empty()).then(|| format!("Shortcuts captured — {}", parts.join(", ")));
+        let hint = (!parts.is_empty()).then(|| {
+            let message = if cfg!(target_os = "macos") {
+                "Keyboard sent to remote"
+            } else {
+                "Shortcuts captured"
+            };
+            format!("{message} — {}", parts.join(", "))
+        });
         focus.connect_enter(move |_| {
-            tracing::debug!("video focused; inhibiting system shortcuts");
+            #[cfg(not(target_os = "macos"))]
             if let Some(toplevel) = window.surface().and_downcast::<gdk::Toplevel>() {
                 toplevel.inhibit_system_shortcuts(None::<&gdk::Event>);
             }
@@ -2857,11 +2998,15 @@ fn install_input_handlers(
         });
     }
     {
+        #[cfg(not(target_os = "macos"))]
         let window = window.clone();
         let ui = ui.clone();
         focus.connect_leave(move |_| {
-            tracing::debug!("video unfocused; restoring system shortcuts");
+            last_tap.borrow_mut().take();
+            launcher_tap.borrow_mut().take();
+            launcher_armed.set(false);
             release_pressed_keys(&ui);
+            #[cfg(not(target_os = "macos"))]
             if let Some(toplevel) = window.surface().and_downcast::<gdk::Toplevel>() {
                 toplevel.restore_system_shortcuts();
             }
@@ -3590,6 +3735,19 @@ mod tests {
         assert!(!hk.matches_physical(0x31, M::ALT_MASK | M::SHIFT_MASK, &lt));
         assert!(!hk.matches_physical(0x23, M::ALT_MASK, &lt)); // kVK_ANSI_P
         assert_eq!(hk.evdev(), Some(57));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn command_counts_as_super_in_configured_hotkeys() {
+        use gdk::ModifierType as M;
+        let last_tap = RefCell::new(None);
+        let release = Hotkey::parse("super+escape").unwrap();
+        let launcher = Hotkey::parse("ctrl+space").unwrap();
+
+        assert!(release.matches(gdk::Key::Escape, M::META_MASK, None, &last_tap));
+        assert!(launcher.matches_physical(0x31, M::CONTROL_MASK, &last_tap));
+        assert!(!launcher.matches_physical(0x31, M::CONTROL_MASK | M::META_MASK, &last_tap));
     }
 
     /// The keyval table covers the keys a chord is struck with.
