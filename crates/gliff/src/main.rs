@@ -2639,7 +2639,7 @@ fn install_input_handlers(
             #[cfg(target_os = "macos")]
             let chord = launcher.matches_physical(keycode as u16, state, &launcher_tap);
             #[cfg(not(target_os = "macos"))]
-            let chord = launcher.matches(keyval, state, &launcher_tap);
+            let chord = launcher.matches(keyval, state, unshifted, &launcher_tap);
             if launcher_armed.get() && !chord {
                 finish_launcher(&ui, &launcher, &launcher_armed, state);
             }

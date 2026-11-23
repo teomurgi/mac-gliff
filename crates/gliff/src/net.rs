@@ -231,10 +231,12 @@ impl Config {
 
 /// The GPU decoder's zoom control, behind a trait so the rule that a
 /// refused zoom is asked for only once can be tested without a GPU.
+#[cfg(target_os = "macos")]
 trait ZoomOutput {
     fn set_zoom(&mut self, zoom: u32) -> gliff_mtl::Result<u32>;
 }
 
+#[cfg(target_os = "macos")]
 impl ZoomOutput for GpuDecoder {
     fn set_zoom(&mut self, zoom: u32) -> gliff_mtl::Result<u32> {
         GpuDecoder::set_zoom(self, zoom)
@@ -277,6 +279,7 @@ impl Zoom {
 
     /// Ask the GPU decoder for the wanted zoom of a `stream`-sized output,
     /// within the budget. `None` when that zoom was asked for already.
+    #[cfg(target_os = "macos")]
     fn sync_gpu(
         &mut self,
         d: &mut impl ZoomOutput,
@@ -427,11 +430,13 @@ fn open_gpu(mode: VideoMode) -> Option<()> {
 fn new_decoder(
     _gpu: &Option<()>,
     chroma: ChromaMode,
-    _width: u32,
-    _height: u32,
+    width: u32,
+    height: u32,
 ) -> anyhow::Result<VideoDecoder> {
     let dual = chroma != ChromaMode::Single420;
-    Ok(VideoDecoder::Cpu(Box::new(gliff_sw::Decoder::new(dual)?)))
+    Ok(VideoDecoder::Cpu(Box::new(gliff_sw::Decoder::new(
+        dual, width, height,
+    )?)))
 }
 
 #[cfg(target_os = "macos")]
@@ -1214,11 +1219,13 @@ mod stream_tests {
         assert_eq!((big.width, big.height), (4000, 4000));
     }
 
+    #[cfg(target_os = "macos")]
     struct FakeOutput {
         asked: Vec<u32>,
         refuse: bool,
     }
 
+    #[cfg(target_os = "macos")]
     impl ZoomOutput for FakeOutput {
         fn set_zoom(&mut self, zoom: u32) -> gliff_mtl::Result<u32> {
             self.asked.push(zoom);
@@ -1230,6 +1237,7 @@ mod stream_tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_refused_gpu_zoom_is_not_asked_for_again() {
         let mut gpu = FakeOutput {
@@ -1560,9 +1568,13 @@ mod session_tests {
             })
             .await
             .expect("a decoded picture");
-            let Frame::Bgra(f) = picture.frame else {
-                panic!("the CPU tier delivers BGRA");
+            #[cfg(target_os = "macos")]
+            let f = match picture.frame {
+                Frame::Bgra(f) => f,
+                Frame::Metal(_) => panic!("the CPU tier delivers BGRA"),
             };
+            #[cfg(not(target_os = "macos"))]
+            let Frame::Bgra(f) = picture.frame;
             // 320x240 fits 20 times within 7680x4320 worth of pixels.
             assert_eq!((f.width, f.height), (w * 20, h * 20));
             assert!(u64::from(f.width) * u64::from(f.height) <= MAX_ZOOMED_PIXELS);
