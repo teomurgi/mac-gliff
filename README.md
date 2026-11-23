@@ -98,12 +98,10 @@ ssh access from the Mac, and `gliff-server`: install it with `omarchy pkg add gl
 from the [Omarchy Package Repository](https://github.com/omacom/omarchy-pkgs), or
 build it from source at the [upstream repo](https://github.com/omacom/gliff#install).
 
-Everything below [Use](#use) is for developers.
-
 ## Use
 
-From the installed app, hit ⌘T/⌘N and type `user@host` in the address bar. The
-commands below launch the client binary directly instead:
+From the installed app, press `Command+T` or `Command+N` and type `user@host` in the
+address bar. The commands below launch the client binary directly instead:
 
 ```sh
 mac-gliff user@host                  # mirror the remote screen that has focus
@@ -112,28 +110,32 @@ mac-gliff --headless user@host       # a private remote screen, sized to this wi
 mac-gliff --video cpu user@host      # force the software tier
 ```
 
-While the pointer is over the picture, keys and window-manager shortcuts go to the remote
-machine; `Shift+Esc` hands them back (`--release-hotkey` changes or disables that). Copy
-on one machine, paste on the other.
-
 Connecting to a machine from a tab (or the address bar) first asks how its screen should
 appear: **Mirror the remote screen**, or **Fit the remote screen to this window** — a
 private headless remote screen that resizes as this window does. Tick *Remember this
-choice for this machine* to skip the question on future connects; right-click the tab to
+choice for this machine* to skip the question on future connects. Right-click the tab to
 change it any time. The choice is kept per machine.
 
-The Mac's own shortcuts work while the keyboard is local — ⌘Q quits, ⌘W closes the
-shown tab, ⌘T/⌘N open the address bar for a new connection. Captured, those chords go
-to the remote machine like any other: release first (`Shift+Esc`) to use them locally.
+Copy on one machine and paste on the other.
 
-A few chords macOS never hands to any app — Spotlight's ⌘Space, the ⌘Tab app
-switcher, Mission Control — so they reach the Mac only, captured or not. GTK's
-macOS backend drops ⌥Space too (the non-breaking space it types never becomes a
-key event). The launcher is bridged around all that: while captured, ⌃Space is
-translated to the remote's `super+space` (`--launcher-hotkey` changes the local
-chord, `none` disables it). Or free ⌘Space itself — System Settings → Keyboard →
-Keyboard Shortcuts → Spotlight, off or remap "Show Spotlight search" — and it
-arrives like any other key.
+### Keyboard shortcuts
+
+The remote picture takes keyboard focus when you move the pointer over it or click it.
+To send `Command+Space` to Hyprland as `Super+Space`, turn on **Capture system shortcuts**
+in the header and focus the connected remote picture. The toggle starts off in each new
+window. In fullscreen, move the pointer to the top edge to see the header.
+
+Press `Shift+Escape` to give the keyboard back to your Mac. Click the picture, or move
+the pointer out and back in, to resume capture while the toggle is on. Gliff also releases
+system shortcuts when the picture loses focus, the window becomes inactive, the session
+disconnects, or you switch capture off. `--release-hotkey` changes or disables the release chord.
+While the keyboard is local, `Command+Q` quits Gliff and `Command+W` closes the shown tab.
+
+System shortcut capture uses a private macOS API with Gliff's existing permissions.
+If capture is unavailable or off, `Control+Space` still sends `Super+Space` while the remote
+picture has keyboard focus. `--launcher-hotkey` changes that chord, and `none` disables it.
+To free `Command+Space` directly, open **System Settings**, then **Keyboard**, **Keyboard
+Shortcuts**, and **Spotlight**. Disable or remap **Show Spotlight search**.
 
 ## Building from source
 
@@ -176,9 +178,9 @@ verified from the mounted image, GTK stack and all.
 - [ ] Homebrew packaging
 - [x] Developer ID codesigning + notarization (since v0.2.0)
 
-Known limits: script-specific and IME-style keyboard layouts fall back to `us`, and
-macOS-reserved chords — Spotlight's ⌘Space, ⌘Tab, Mission Control — stay on the Mac even while
-captured (⌃Space stands in for the remote's launcher).
+Script-specific and IME-style keyboard layouts fall back to `us`. GTK may drop `Option+Space`
+because that chord produces a non-breaking space. Which system shortcuts Gliff can capture
+may vary with the macOS version.
 
 ## Documentation
 

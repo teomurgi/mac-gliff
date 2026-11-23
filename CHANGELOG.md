@@ -1,6 +1,14 @@
 # Changelog
 
 Derived from [conventional commits](https://www.conventionalcommits.org).
+
+## Unreleased
+
+### Features
+
+- Add an opt-in macOS toggle to send system shortcuts such as `Command+Space` to the
+  remote desktop while its picture has focus. Press `Shift+Escape` to release the keyboard.
+
 ## v0.4.0 (2026-11-23)
 ### Documentation
 - Tighten the changelog sections since v0.2.0 ([9e7d0bf](https://github.com/teomurgi/mac-gliff/commit/9e7d0bf0bbb84af721f23c84e01b7eee0e752c0b))
